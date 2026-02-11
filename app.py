@@ -270,7 +270,7 @@ if edit_issue:
     default_problem = edit_issue["problem_description"]
     default_action = edit_issue["action"] or ""
     default_fix_date = parse_iso_date(edit_issue["fix_date"])
-    default_fix_by = edit_issue["fix_by"] or ""
+    default_fix_by = edit_issue["fix_by"] or "--Select Option Below--"
     default_grounded = bool(edit_issue["grounded"])
     default_unusable = bool(edit_issue["unusable"])
 else:
