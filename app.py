@@ -240,22 +240,6 @@ init_db()
 st.title("REPORT VAN ISSUE")
 st.caption(f"Backend: {'Firestore' if using_firestore() else 'SQLite'}")
 
-# Remove red error outline from selectboxes
-st.markdown(
-    """
-    <style>
-    /* Completely remove red error border and glow from selectbox */
-    div[data-baseweb="select"] > div,
-    div[data-baseweb="select"] > div:focus,
-    div[data-baseweb="select"][aria-invalid="true"] > div {
-        border: none !important;
-        box-shadow: none !important;
-        outline: none !important;
-    }
-    </style>
-    """
-)
-
 # Two modes: Create new or Edit existing
 issues = fetch_issues()
 issue_map = {f"#{r['id']} | Van {r['van_number']} | Reported {r['date_reported']}" : r["id"] for r in issues}
