@@ -238,27 +238,7 @@ st.set_page_config(page_title="Van Issues Log", layout="wide")
 init_db()
 
 st.title("REPORT VAN ISSUE")
-
 st.caption(f"Backend: {'Firestore' if using_firestore() else 'SQLite'}")
-
-# Remove red error outline from selectboxes
-st.markdown(
-    """
-    <style>
-    div[data-baseweb="select"] > div {
-        border-color: #d9d9d9 !important;
-        box-shadow: none !important;
-    }
-
-    div[data-baseweb="select"] > div:focus,
-    div[data-baseweb="select"][aria-invalid="true"] > div {
-        border-color: #d9d9d9 !important;
-        box-shadow: none !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True
-)
 
 # Two modes: Create new or Edit existing
 issues = fetch_issues()
