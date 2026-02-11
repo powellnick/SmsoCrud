@@ -131,6 +131,7 @@ st.set_page_config(page_title="Van Issues Log", layout="wide")
 init_db()
 
 st.title("REPORT VAN ISSUE")
+st.caption(f"Backend: {'Firestore' if using_firestore() else 'SQLite'}")
 
 # Two modes: Create new or Edit existing
 issues = fetch_issues()
