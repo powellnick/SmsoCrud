@@ -270,7 +270,7 @@ if edit_issue:
     default_problem = edit_issue["problem_description"]
     default_action = edit_issue["action"] or ""
     default_fix_date = parse_iso_date(edit_issue["fix_date"])
-    default_fix_by = edit_issue["fix_by"] or "--Select Option Below--"
+    default_fix_by = edit_issue["fix_by"] or ""
     default_grounded = bool(edit_issue["grounded"])
     default_unusable = bool(edit_issue["unusable"])
 else:
@@ -321,7 +321,7 @@ with st.form("van_issue_form", clear_on_submit=(mode == "Create new")):
     with bottom[2]:
         st.markdown("**Fix By**")
         fix_by_options = [
-            "",
+            "--Select option below--",
             "Goodyear",
             "Spiffy",
             "Les Schwab",
@@ -333,7 +333,7 @@ with st.form("van_issue_form", clear_on_submit=(mode == "Create new")):
         ]
 
         # Ensure default value is valid
-        default_fix_by_value = default_fix_by if default_fix_by in fix_by_options else ""
+        default_fix_by_value = default_fix_by if default_fix_by in fix_by_options else "--Select option below--"
 
         fix_by = st.selectbox(
             "fix_by",
@@ -341,6 +341,8 @@ with st.form("van_issue_form", clear_on_submit=(mode == "Create new")):
             index=fix_by_options.index(default_fix_by_value),
             label_visibility="collapsed"
         )
+        if fix_by == "--Select option below--":
+            fix_by = ""
 
     # Buttons row
     b1, b2, b3 = st.columns([1, 1, 6])
