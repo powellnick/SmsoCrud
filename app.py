@@ -319,7 +319,7 @@ with st.form("van_issue_form", clear_on_submit=(mode == "Create new")):
         # We'll treat a "Fix Date" equal to today's date as intentional if user set it;
         # If you want a blank-able fix date, tell me and I’ll swap to a text input or a toggle.
     with bottom[2]:
-        st.markdown("**Fix By**")
+        st.markdown("**Provider**")
         fix_by_options = [
             "--Select option below--",
             "Goodyear",
@@ -414,7 +414,7 @@ else:
             "Grounded": "YES" if (r.get("grounded") if hasattr(r, "get") else r["grounded"]) else "NO",
             "Unusable": "YES" if (r.get("unusable") if hasattr(r, "get") else r["unusable"]) else "NO",
             "Fix Date": (r.get("fix_date") if hasattr(r, "get") else r["fix_date"]) or "",
-            "Fix By": (r.get("fix_by") if hasattr(r, "get") else r["fix_by"]) or "",
+            "Provider": (r.get("fix_by") if hasattr(r, "get") else r["fix_by"]) or "",
             "Problem": r.get("problem_description", "") if hasattr(r, "get") else r["problem_description"],
             "Action": (r.get("action") if hasattr(r, "get") else r["action"]) or "",
             "Updated": r.get("updated_at", "") if hasattr(r, "get") else r["updated_at"],
