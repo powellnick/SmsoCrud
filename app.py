@@ -320,7 +320,27 @@ with st.form("van_issue_form", clear_on_submit=(mode == "Create new")):
         # If you want a blank-able fix date, tell me and I’ll swap to a text input or a toggle.
     with bottom[2]:
         st.markdown("**Fix By**")
-        fix_by = st.text_input("fix_by", value=default_fix_by, label_visibility="collapsed")
+        fix_by_options = [
+            "",
+            "Goodyear",
+            "Spiffy",
+            "Les Schwab",
+            "Discount",
+            "Showcase",
+            "Rairdon",
+            "Harris",
+            "In house",
+        ]
+
+        # Ensure default value is valid
+        default_fix_by_value = default_fix_by if default_fix_by in fix_by_options else ""
+
+        fix_by = st.selectbox(
+            "fix_by",
+            options=fix_by_options,
+            index=fix_by_options.index(default_fix_by_value),
+            label_visibility="collapsed"
+        )
 
     # Buttons row
     b1, b2, b3 = st.columns([1, 1, 6])
