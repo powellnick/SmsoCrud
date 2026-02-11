@@ -1,8 +1,38 @@
 import sqlite3
 from datetime import date, datetime
 import streamlit as st
+import json
+import firebase_admin
+from firebase_admin import credentials, firestore
 
 DB_PATH = "van_issues.db"
+
+def using_firestore() -> bool:
+    """
+    Firestore is enabled when a Firebase Admin service account is present in Streamlit secrets.
+    In Streamlit Cloud, set this in the app's Secrets as `firebase_service_account`.
+    """
+    try:
+        return "firebase_service_account" in st.secrets
+    except Exception:
+        return False
+
+@st.cache_resource
+def get_firestore_client():
+    """
+    Expects st.secrets["firebase_service_account"] to be either:
+      - a dict (recommended), OR
+      - a JSON string (raw service account JSON).
+    """
+    svc = st.secrets["firebase_service_account"]
+    if isinstance(svc, str):
+        svc = json.loads(svc)
+
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(svc)
+        firebase_admin.initialize_app(cred)
+
+    return firestore.client()
 
 # ----------------------------
 # DB helpers
@@ -13,6 +43,8 @@ def get_conn():
     return conn
 
 def init_db():
+    if using_firestore():
+        return
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -40,6 +72,22 @@ def init_db():
 
 def insert_issue(van_number, date_reported, problem_description, action, fix_date, fix_by, grounded, unusable):
     now = datetime.utcnow().isoformat()
+    if using_firestore():
+        db = get_firestore_client()
+        doc = {
+            "van_number": van_number.strip(),
+            "date_reported": date_reported.isoformat(),
+            "problem_description": problem_description.strip(),
+            "action": (action or "").strip(),
+            "fix_date": fix_date.isoformat() if fix_date else None,
+            "fix_by": (fix_by or "").strip(),
+            "grounded": bool(grounded),
+            "unusable": bool(unusable),
+            "created_at": now,
+            "updated_at": now,
+        }
+        db.collection("van_issues").add(doc)
+        return
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -63,6 +111,21 @@ def insert_issue(van_number, date_reported, problem_description, action, fix_dat
 
 def update_issue(issue_id, van_number, date_reported, problem_description, action, fix_date, fix_by, grounded, unusable):
     now = datetime.utcnow().isoformat()
+    if using_firestore():
+        db = get_firestore_client()
+        doc = {
+            "van_number": van_number.strip(),
+            "date_reported": date_reported.isoformat(),
+            "problem_description": problem_description.strip(),
+            "action": (action or "").strip(),
+            "fix_date": fix_date.isoformat() if fix_date else None,
+            "fix_by": (fix_by or "").strip(),
+            "grounded": bool(grounded),
+            "unusable": bool(unusable),
+            "updated_at": now,
+        }
+        db.collection("van_issues").document(str(issue_id)).set(doc, merge=True)
+        return
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -93,6 +156,10 @@ def update_issue(issue_id, van_number, date_reported, problem_description, actio
     conn.close()
 
 def delete_issue(issue_id):
+    if using_firestore():
+        db = get_firestore_client()
+        db.collection("van_issues").document(str(issue_id)).delete()
+        return
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("DELETE FROM van_issues WHERE id=?", (issue_id,))
@@ -100,6 +167,23 @@ def delete_issue(issue_id):
     conn.close()
 
 def fetch_issues(limit=200):
+    if using_firestore():
+        db = get_firestore_client()
+        docs = (
+            db.collection("van_issues")
+              .order_by("date_reported", direction=firestore.Query.DESCENDING)
+              .limit(limit)
+              .stream()
+        )
+        rows = []
+        for d in docs:
+            data = d.to_dict() or {}
+            data["id"] = d.id
+            rows.append(data)
+
+        # Keep grounded/unusable at the top (similar intent to the SQLite ORDER BY)
+        rows.sort(key=lambda r: (not bool(r.get("grounded")), not bool(r.get("unusable"))))
+        return rows
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -116,6 +200,14 @@ def fetch_issues(limit=200):
     return rows
 
 def fetch_issue_by_id(issue_id):
+    if using_firestore():
+        db = get_firestore_client()
+        snap = db.collection("van_issues").document(str(issue_id)).get()
+        if not snap.exists:
+            return None
+        data = snap.to_dict() or {}
+        data["id"] = snap.id
+        return data
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT * FROM van_issues WHERE id=?", (issue_id,))
@@ -279,15 +371,15 @@ else:
     table = []
     for r in rows:
         table.append({
-            "ID": r["id"],
-            "Van": r["van_number"],
-            "Date Reported": r["date_reported"],
-            "Grounded": "YES" if r["grounded"] else "NO",
-            "Unusable": "YES" if r["unusable"] else "NO",
-            "Fix Date": r["fix_date"] or "",
-            "Fix By": r["fix_by"] or "",
-            "Problem": r["problem_description"],
-            "Action": r["action"] or "",
-            "Updated": r["updated_at"],
+            "ID": r.get("id") if hasattr(r, "get") else r["id"],
+            "Van": r.get("van_number", "") if hasattr(r, "get") else r["van_number"],
+            "Date Reported": r.get("date_reported", "") if hasattr(r, "get") else r["date_reported"],
+            "Grounded": "YES" if (r.get("grounded") if hasattr(r, "get") else r["grounded"]) else "NO",
+            "Unusable": "YES" if (r.get("unusable") if hasattr(r, "get") else r["unusable"]) else "NO",
+            "Fix Date": (r.get("fix_date") if hasattr(r, "get") else r["fix_date"]) or "",
+            "Fix By": (r.get("fix_by") if hasattr(r, "get") else r["fix_by"]) or "",
+            "Problem": r.get("problem_description", "") if hasattr(r, "get") else r["problem_description"],
+            "Action": (r.get("action") if hasattr(r, "get") else r["action"]) or "",
+            "Updated": r.get("updated_at", "") if hasattr(r, "get") else r["updated_at"],
         })
     st.dataframe(table, use_container_width=True, hide_index=True)
