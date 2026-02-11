@@ -9,22 +9,26 @@ DB_PATH = "van_issues.db"
 
 def using_firestore() -> bool:
     """
-    Firestore is enabled when a Firebase Admin service account is present in Streamlit secrets.
-    In Streamlit Cloud, set this in the app's Secrets as `firebase_service_account`.
+    Firestore is enabled when a Firebase/GCP service account is present in Streamlit secrets.
+    Accepts either:
+      - st.secrets["firebase_service_account"]  (our original key)
+      - st.secrets["gcp_service_account"]       (Streamlit's common naming)
     """
     try:
-        return "firebase_service_account" in st.secrets
+        return ("firebase_service_account" in st.secrets) or ("gcp_service_account" in st.secrets)
     except Exception:
         return False
 
 @st.cache_resource
 def get_firestore_client():
     """
-    Expects st.secrets["firebase_service_account"] to be either:
+    Expects st.secrets["firebase_service_account"] or st.secrets["gcp_service_account"] to be either:
       - a dict (recommended), OR
       - a JSON string (raw service account JSON).
     """
-    svc = st.secrets["firebase_service_account"]
+    svc = st.secrets.get("firebase_service_account") or st.secrets.get("gcp_service_account")
+    if not svc:
+        raise KeyError("Missing firebase_service_account or gcp_service_account in Streamlit secrets.")
     if isinstance(svc, str):
         svc = json.loads(svc)
 
