@@ -4,6 +4,7 @@ import streamlit as st
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore
+from collections.abc import Mapping
 
 DB_PATH = "van_issues.db"
 
@@ -31,6 +32,16 @@ def get_firestore_client():
         raise KeyError("Missing firebase_service_account or gcp_service_account in Streamlit secrets.")
     if isinstance(svc, str):
         svc = json.loads(svc)
+
+    # Streamlit secrets sections are not plain dicts; Firebase Admin expects a real dict.
+    if isinstance(svc, Mapping):
+        def to_plain(obj):
+            if isinstance(obj, Mapping):
+                return {k: to_plain(v) for k, v in obj.items()}
+            if isinstance(obj, list):
+                return [to_plain(v) for v in obj]
+            return obj
+        svc = to_plain(svc)
 
     if not firebase_admin._apps:
         cred = credentials.Certificate(svc)
