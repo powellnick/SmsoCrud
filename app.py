@@ -321,7 +321,7 @@ with st.form("van_issue_form", clear_on_submit=(mode == "Create new")):
     with bottom[2]:
         st.markdown("**Fix By**")
         fix_by_options = [
-            "",
+            "--Select option below--",
             "Goodyear",
             "Spiffy",
             "Les Schwab",
