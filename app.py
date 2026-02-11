@@ -314,14 +314,14 @@ with st.form("van_issue_form", clear_on_submit=(mode == "Create new")):
     bottom = st.columns([2, 1, 2, 3])
     with bottom[0]:
         st.markdown("**Fix Date**")
-        fix_date = st.date_input("fix_date", value=default_fix_date, label_visibility="collapsed")
+        fix_date = st.date_input("fix_date", value="--Select option below--", label_visibility="collapsed")
         # Streamlit date_input cannot be truly empty unless we handle it:
         # We'll treat a "Fix Date" equal to today's date as intentional if user set it;
         # If you want a blank-able fix date, tell me and I’ll swap to a text input or a toggle.
     with bottom[2]:
         st.markdown("**Fix By**")
         fix_by_options = [
-            "--Select option below--",
+            "",
             "Goodyear",
             "Spiffy",
             "Les Schwab",
