@@ -398,10 +398,9 @@ with st.expander("Vans Debug (available vs unavailable)", expanded=False):
     with c3:
         st.caption("Availability is derived from whether an issue exists for a van.")
 
-    st.markdown("**All vans (raw):**")
-    st.dataframe(vans, use_container_width=True, hide_index=True)
-
 with st.expander("Manage Vans (add / delete)", expanded=False):
+    st.markdown("Add vans (e.g., `62, 64`). Availability is assumed unless an issue exists for that van.")
+
     c1, c2 = st.columns([3, 1])
     with c1:
         new_vans_text = st.text_input("Add van numbers", placeholder="Example: 62, 64", label_visibility="visible")
