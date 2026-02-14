@@ -382,7 +382,7 @@ st.title("REPORT VAN ISSUE")
 st.caption(f"Backend: {'Firestore' if using_firestore() else 'SQLite'}")
 
 # Vans Debug UI block
-with st.expander("Vans Debug (available vs unavailable)", expanded=False):
+with st.expander("Vans (available vs unavailable)", expanded=False):
     # Fetch current status from DB
     vans = fetch_all_vans_status()
     available = [v["Van"] for v in vans if v["Available"]]
