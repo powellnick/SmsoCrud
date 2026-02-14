@@ -102,6 +102,7 @@ def insert_issue(van_number, date_reported, problem_description, action, fix_dat
             "updated_at": now,
         }
         db.collection("van_issues").add(doc)
+        set_van_available(van_number.strip(), False)
         return
     conn = get_conn()
     cur = conn.cursor()
@@ -122,10 +123,15 @@ def insert_issue(van_number, date_reported, problem_description, action, fix_dat
         now
     ))
     conn.commit()
+    set_van_available(van_number.strip(), False)
     conn.close()
 
 def update_issue(issue_id, van_number, date_reported, problem_description, action, fix_date, fix_by, grounded, unusable):
     now = datetime.utcnow().isoformat()
+    existing = fetch_issue_by_id(issue_id)
+    old_van = None
+    if existing:
+        old_van = existing.get("van_number") if hasattr(existing, "get") else existing["van_number"]
     if using_firestore():
         db = get_firestore_client()
         doc = {
@@ -140,6 +146,10 @@ def update_issue(issue_id, van_number, date_reported, problem_description, actio
             "updated_at": now,
         }
         db.collection("van_issues").document(str(issue_id)).set(doc, merge=True)
+        # availability updates
+        set_van_available(van_number.strip(), False)
+        if old_van and str(old_van) != str(van_number.strip()):
+            recompute_van_availability(str(old_van))
         return
     conn = get_conn()
     cur = conn.cursor()
@@ -168,18 +178,32 @@ def update_issue(issue_id, van_number, date_reported, problem_description, actio
         issue_id
     ))
     conn.commit()
+    set_van_available(van_number.strip(), False)
+    if old_van and str(old_van) != str(van_number.strip()):
+        recompute_van_availability(str(old_van))
     conn.close()
 
 def delete_issue(issue_id):
+    issue = fetch_issue_by_id(issue_id)
+    van_num = None
+    if issue:
+        # Works for both sqlite row and dict
+        van_num = issue.get("van_number") if hasattr(issue, "get") else issue["van_number"]
+
     if using_firestore():
         db = get_firestore_client()
-        db.collection("van_issues").document(str(issue_id)).delete()
+        db.collection(ISSUES_COLLECTION).document(str(issue_id)).delete()
+        if van_num:
+            recompute_van_availability(str(van_num))
         return
+
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("DELETE FROM van_issues WHERE id=?", (issue_id,))
     conn.commit()
     conn.close()
+    if van_num:
+        recompute_van_availability(str(van_num))
 
 def fetch_issues(limit=200):
     if using_firestore():
@@ -232,10 +256,151 @@ def fetch_issue_by_id(issue_id):
 
 
 # ----------------------------
+# Vans helpers (available vans list)
+# ----------------------------
+VANS_COLLECTION = "vans"
+ISSUES_COLLECTION = "van_issues"
+DEFAULT_VAN_START = 1
+DEFAULT_VAN_END = 60
+
+def init_vans(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END):
+    """
+    Ensure a persistent list of vans exists in the database.
+    SQLite: creates/seed `vans` table with van_number, active, available
+    Firestore: creates/seed `vans` collection with docs keyed by van_number
+    """
+    if using_firestore():
+        db = get_firestore_client()
+        # If there are no van docs, seed 1..60 as active+available
+        existing = list(db.collection(VANS_COLLECTION).limit(1).stream())
+        if existing:
+            return
+        batch = db.batch()
+        for n in range(start, end + 1):
+            ref = db.collection(VANS_COLLECTION).document(str(n))
+            batch.set(ref, {"van_number": str(n), "active": True, "available": True})
+        batch.commit()
+        return
+
+    # SQLite
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS vans (
+            van_number TEXT PRIMARY KEY,
+            active INTEGER NOT NULL DEFAULT 1,
+            available INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+    cur.execute("SELECT COUNT(*) FROM vans")
+    count = cur.fetchone()[0]
+    if count == 0:
+        cur.executemany(
+            "INSERT INTO vans (van_number, active, available) VALUES (?, 1, 1)",
+            [(str(n),) for n in range(start, end + 1)]
+        )
+    conn.commit()
+    conn.close()
+
+def set_van_available(van_number: str, available: bool):
+    if not van_number:
+        return
+    if using_firestore():
+        db = get_firestore_client()
+        db.collection(VANS_COLLECTION).document(str(van_number)).set(
+            {"van_number": str(van_number), "available": bool(available)},
+            merge=True
+        )
+        return
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE vans SET available=? WHERE van_number=?",
+        (1 if available else 0, str(van_number))
+    )
+    conn.commit()
+    conn.close()
+
+def count_issues_for_van(van_number: str) -> int:
+    if not van_number:
+        return 0
+    if using_firestore():
+        db = get_firestore_client()
+        docs = db.collection(ISSUES_COLLECTION).where("van_number", "==", str(van_number)).limit(1000).stream()
+        return sum(1 for _ in docs)
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM van_issues WHERE van_number=?", (str(van_number),))
+    c = cur.fetchone()[0]
+    conn.close()
+    return int(c)
+
+def recompute_van_availability(van_number: str):
+    """
+    A van is considered unavailable if there exists >=1 issue record for that van.
+    (Later we can refine this to only count 'open' issues.)
+    """
+    issue_count = count_issues_for_van(str(van_number))
+    set_van_available(str(van_number), available=(issue_count == 0))
+
+def fetch_active_vans() -> list[str]:
+    """All vans that are marked active (editable later)."""
+    if using_firestore():
+        db = get_firestore_client()
+        docs = db.collection(VANS_COLLECTION).where("active", "==", True).stream()
+        vans = []
+        for d in docs:
+            data = d.to_dict() or {}
+            vans.append(str(data.get("van_number", d.id)))
+        # numeric sort
+        vans.sort(key=lambda x: int(x) if str(x).isdigit() else 10**9)
+        return vans
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT van_number FROM vans WHERE active=1 ORDER BY CAST(van_number AS INTEGER) ASC")
+    vans = [row[0] for row in cur.fetchall()]
+    conn.close()
+    return vans
+
+def fetch_available_vans() -> list[str]:
+    """Only vans that are active AND available."""
+    if using_firestore():
+        db = get_firestore_client()
+        docs = (
+            db.collection(VANS_COLLECTION)
+              .where("active", "==", True)
+              .where("available", "==", True)
+              .stream()
+        )
+        vans = []
+        for d in docs:
+            data = d.to_dict() or {}
+            vans.append(str(data.get("van_number", d.id)))
+        vans.sort(key=lambda x: int(x) if str(x).isdigit() else 10**9)
+        return vans
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT van_number
+        FROM vans
+        WHERE active=1 AND available=1
+        ORDER BY CAST(van_number AS INTEGER) ASC
+    """)
+    vans = [row[0] for row in cur.fetchall()]
+    conn.close()
+    return vans
+
+
+# ----------------------------
 # UI
 # ----------------------------
 st.set_page_config(page_title="Van Issues Log", layout="wide")
 init_db()
+init_vans()
 
 st.title("REPORT VAN ISSUE")
 st.caption(f"Backend: {'Firestore' if using_firestore() else 'SQLite'}")
@@ -283,7 +448,6 @@ else:
     default_grounded = False
     default_unusable = False
 
-# Form layout similar to your screenshot
 with st.form("van_issue_form", clear_on_submit=(mode == "Create new")):
     left, right = st.columns([3, 2])
 
@@ -292,7 +456,25 @@ with st.form("van_issue_form", clear_on_submit=(mode == "Create new")):
         with c1:
             st.markdown("**Van**")
         with c2:
-            van_number = st.text_input("", value=default_van, placeholder="VanNum", label_visibility="collapsed")
+            available_vans = fetch_available_vans()
+            active_vans = fetch_active_vans()
+
+            if mode == "Edit existing" and default_van and default_van not in available_vans:
+                van_options = ["--Select van--"] + [default_van] + [v for v in available_vans if v != default_van]
+            else:
+                van_options = ["--Select van--"] + available_vans
+
+            default_van_value = default_van if default_van in van_options else "--Select van--"
+
+            van_number = st.selectbox(
+                "van_number",
+                options=van_options,
+                index=van_options.index(default_van_value),
+                label_visibility="collapsed"
+            )
+
+            if van_number == "--Select van--":
+                van_number = ""
 
         c3, c4 = st.columns([1, 3])
         with c3:
