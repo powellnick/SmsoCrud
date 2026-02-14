@@ -624,7 +624,49 @@ with st.form("van_issue_form", clear_on_submit=(mode == "Create new")):
 st.divider()
 st.subheader("Current Issues")
 
-rows = fetch_issues(limit=500)
+# Search + filters
+f1, f2 = st.columns([2, 2])
+
+with f1:
+    search_q = st.text_input(
+        "Search (Van # or Provider)",
+        value="",
+        placeholder="Type a van number (e.g., 50) or provider (e.g., Spiffy)"
+    ).strip()
+
+with f2:
+    provider_options = ["Goodyear", "Spiffy", "Les Schwab", "Discount", "Showcase", "Rairdon", "Harris", "In house"]
+    provider_filter = st.multiselect(
+        "Filter Providers",
+        options=provider_options,
+        default=[]
+    )
+
+rows = fetch_issues(limit=5000)
+
+# Apply filters
+def norm(s):
+    return (s or "").strip().lower()
+
+if provider_filter:
+    allowed = {norm(p) for p in provider_filter}
+    filtered = []
+    for r in rows:
+        prov = r.get("fix_by") if hasattr(r, "get") else r["fix_by"]
+        if norm(prov) in allowed:
+            filtered.append(r)
+    rows = filtered
+
+if search_q:
+    q = norm(search_q)
+    filtered = []
+    for r in rows:
+        van = r.get("van_number") if hasattr(r, "get") else r["van_number"]
+        prov = r.get("fix_by") if hasattr(r, "get") else r["fix_by"]
+        if q in norm(str(van)) or q in norm(str(prov)):
+            filtered.append(r)
+    rows = filtered
+
 if not rows:
     st.info("No issues logged yet.")
 else:
