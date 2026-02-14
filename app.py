@@ -395,9 +395,7 @@ with st.expander("Vans Debug (available vs unavailable)", expanded=False):
     with c2:
         st.markdown(f"**Unavailable ({len(unavailable)}):**")
         st.write(", ".join(unavailable) if unavailable else "—")
-    with c3:
-        st.caption("Availability is derived from whether an issue exists for a van.")
-
+   
 with st.expander("Manage Vans (add / delete)", expanded=False):
     st.markdown("Add vans (e.g., `62, 64`). Availability is assumed unless an issue exists for that van.")
 
