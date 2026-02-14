@@ -403,7 +403,56 @@ init_db()
 init_vans()
 
 st.title("REPORT VAN ISSUE")
+
 st.caption(f"Backend: {'Firestore' if using_firestore() else 'SQLite'}")
+
+# Vans Debug UI block
+with st.expander("Vans Debug (available vs unavailable)", expanded=False):
+    # Fetch current status from DB
+    if using_firestore():
+        db = get_firestore_client()
+        docs = db.collection(VANS_COLLECTION).stream()
+        vans = []
+        for d in docs:
+            data = d.to_dict() or {}
+            vans.append({
+                "Van": str(data.get("van_number", d.id)),
+                "Active": bool(data.get("active", True)),
+                "Available": bool(data.get("available", True)),
+            })
+        # numeric sort
+        vans.sort(key=lambda r: int(r["Van"]) if r["Van"].isdigit() else 10**9)
+    else:
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT van_number, active, available
+            FROM vans
+            ORDER BY CAST(van_number AS INTEGER) ASC
+        """)
+        vans = [{"Van": str(r[0]), "Active": bool(r[1]), "Available": bool(r[2])} for r in cur.fetchall()]
+        conn.close()
+
+    available = [v["Van"] for v in vans if v["Active"] and v["Available"]]
+    unavailable = [v["Van"] for v in vans if v["Active"] and (not v["Available"])]
+
+    c1, c2, c3 = st.columns([2, 2, 1])
+    with c1:
+        st.markdown(f"**Available ({len(available)}):**")
+        st.write(", ".join(available) if available else "—")
+    with c2:
+        st.markdown(f"**Unavailable ({len(unavailable)}):**")
+        st.write(", ".join(unavailable) if unavailable else "—")
+    with c3:
+        if st.button("Recompute availability from issues", use_container_width=True):
+            # For each van, mark available iff it has 0 issues (current business rule)
+            for v in [x["Van"] for x in vans if x["Active"]]:
+                recompute_van_availability(str(v))
+            st.success("Recomputed.")
+            st.rerun()
+
+    st.markdown("**All vans (raw):**")
+    st.dataframe(vans, use_container_width=True, hide_index=True)
 
 # Two modes: Create new or Edit existing
 issues = fetch_issues()
