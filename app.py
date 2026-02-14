@@ -394,6 +394,66 @@ def fetch_available_vans() -> list[str]:
     conn.close()
     return vans
 
+# ---- VAN MANAGEMENT HELPERS ----
+def upsert_van(van_number: str, active: bool = True, available: bool = True):
+    van_number = str(van_number).strip()
+    if not van_number:
+        return
+
+    if using_firestore():
+        db = get_firestore_client()
+        db.collection(VANS_COLLECTION).document(van_number).set(
+            {"van_number": van_number, "active": bool(active), "available": bool(available)},
+            merge=True
+        )
+        return
+
+    conn = get_conn()
+    cur = conn.cursor()
+    # Ensure table exists (for safety)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS vans (
+            van_number TEXT PRIMARY KEY,
+            active INTEGER NOT NULL DEFAULT 1,
+            available INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+    cur.execute("""
+        INSERT INTO vans (van_number, active, available)
+        VALUES (?, ?, ?)
+        ON CONFLICT(van_number) DO UPDATE SET
+            active=excluded.active,
+            available=excluded.available
+    """, (van_number, 1 if active else 0, 1 if available else 0))
+    conn.commit()
+    conn.close()
+
+def fetch_all_vans_status() -> list[dict]:
+    if using_firestore():
+        db = get_firestore_client()
+        docs = db.collection(VANS_COLLECTION).stream()
+        vans = []
+        for d in docs:
+            data = d.to_dict() or {}
+            vans.append({
+                "Van": str(data.get("van_number", d.id)),
+                "Active": bool(data.get("active", True)),
+                "Available": bool(data.get("available", True)),
+            })
+        vans.sort(key=lambda r: int(r["Van"]) if r["Van"].isdigit() else 10**9)
+        return vans
+
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT van_number, active, available
+        FROM vans
+        ORDER BY CAST(van_number AS INTEGER) ASC
+    """)
+    vans = [{"Van": str(r[0]), "Active": bool(r[1]), "Available": bool(r[2])} for r in cur.fetchall()]
+    conn.close()
+    return vans
+
 
 # ----------------------------
 # UI
@@ -409,29 +469,7 @@ st.caption(f"Backend: {'Firestore' if using_firestore() else 'SQLite'}")
 # Vans Debug UI block
 with st.expander("Vans Debug (available vs unavailable)", expanded=False):
     # Fetch current status from DB
-    if using_firestore():
-        db = get_firestore_client()
-        docs = db.collection(VANS_COLLECTION).stream()
-        vans = []
-        for d in docs:
-            data = d.to_dict() or {}
-            vans.append({
-                "Van": str(data.get("van_number", d.id)),
-                "Active": bool(data.get("active", True)),
-                "Available": bool(data.get("available", True)),
-            })
-        # numeric sort
-        vans.sort(key=lambda r: int(r["Van"]) if r["Van"].isdigit() else 10**9)
-    else:
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT van_number, active, available
-            FROM vans
-            ORDER BY CAST(van_number AS INTEGER) ASC
-        """)
-        vans = [{"Van": str(r[0]), "Active": bool(r[1]), "Available": bool(r[2])} for r in cur.fetchall()]
-        conn.close()
+    vans = fetch_all_vans_status()
 
     available = [v["Van"] for v in vans if v["Active"] and v["Available"]]
     unavailable = [v["Van"] for v in vans if v["Active"] and (not v["Available"])]
@@ -453,6 +491,53 @@ with st.expander("Vans Debug (available vs unavailable)", expanded=False):
 
     st.markdown("**All vans (raw):**")
     st.dataframe(vans, use_container_width=True, hide_index=True)
+
+# --- Manage Vans UI ---
+with st.expander("Manage Vans (add / activate / mark available)", expanded=False):
+    st.markdown("Add vans (e.g., `62, 64`) or toggle availability without changing code.")
+
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        new_vans_text = st.text_input("Add van numbers", placeholder="Example: 62, 64", label_visibility="visible")
+    with c2:
+        new_active = st.checkbox("Active", value=True)
+    with c3:
+        new_available = st.checkbox("Available", value=True)
+
+    add_btn = st.button("Add / Update Vans", use_container_width=True)
+    if add_btn:
+        # Parse comma/space separated list
+        raw = new_vans_text.replace("\n", ",").replace(" ", ",")
+        parts = [p.strip() for p in raw.split(",") if p.strip()]
+        added = 0
+        for p in parts:
+            if p.isdigit():
+                upsert_van(p, active=new_active, available=new_available)
+                added += 1
+        if added == 0:
+            st.warning("No valid van numbers found. Please enter numbers like: 62, 64")
+        else:
+            st.success(f"Updated {added} van(s).")
+            st.rerun()
+
+    st.divider()
+    st.markdown("Quick toggle for a single van:")
+    t1, t2, t3, t4 = st.columns([2, 1, 1, 2])
+    with t1:
+        vans_list = [v["Van"] for v in fetch_all_vans_status()]
+        pick = st.selectbox("Van", options=["--Select van--"] + vans_list, index=0)
+    with t2:
+        set_active = st.checkbox("Set Active", value=True)
+    with t3:
+        set_available = st.checkbox("Set Available", value=True)
+    with t4:
+        if st.button("Apply Toggle", use_container_width=True, disabled=(pick == "--Select van--")):
+            upsert_van(pick, active=set_active, available=set_available)
+            st.success(f"Updated van {pick}.")
+            st.rerun()
+
+    st.markdown("Current vans list:")
+    st.dataframe(fetch_all_vans_status(), use_container_width=True, hide_index=True)
 
 # Two modes: Create new or Edit existing
 issues = fetch_issues()
