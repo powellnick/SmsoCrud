@@ -944,26 +944,15 @@ def render_reports() -> None:
     issues_for_reports: list[dict]
 
     if using_firestore():
-        if st.button("Load reports from Firestore", key="load_reports_btn", use_container_width=True):
-            st.session_state["load_reports"] = True
-            try:
-                fetch_issues.clear()
-            except Exception:
-                st.cache_data.clear()
-
-        if st.session_state.get("load_reports"):
-            issues_limit = st.number_input(
-                "Issues to load",
-                min_value=50,
-                max_value=2000,
-                value=200,
-                step=50,
-                key="issues_limit_reports",
-            )
-            issues_for_reports = fetch_issues(limit=int(issues_limit), backend="firestore")
-        else:
-            issues_for_reports = []
-            st.info("Click “Load reports from Firestore” to load the report table.")
+        issues_limit = st.number_input(
+            "Issues to load",
+            min_value=50,
+            max_value=2000,
+            value=200,
+            step=50,
+            key="issues_limit_reports",
+        )
+        issues_for_reports = fetch_issues(limit=int(issues_limit), backend="firestore")
     else:
         issues_for_reports = fetch_issues(limit=5000, backend="sqlite")
 
