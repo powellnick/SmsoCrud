@@ -861,10 +861,7 @@ def render_manage_vans() -> None:
         st.markdown(f"**Unavailable ({len(unavailable)}):**")
         formatted = []
         for v in unavailable:
-            if "Open Issues" in v:
-                formatted.append(f'{v["Van"]} ({v["Open Issues"]})')
-            else:
-                formatted.append(v["Van"])
+            formatted.append(v["Van"])
         st.write(", ".join(formatted) if formatted else "—")
 
     st.divider()
@@ -908,8 +905,6 @@ def render_manage_vans() -> None:
             if not v:
                 continue
             status = "Available" if row.get("Available") else "Unavailable"
-            if "Open Issues" in row and not row.get("Available"):
-                status = f'{status} ({row["Open Issues"]})'
             label = f"Van {v} — {status}"
             options.append(label)
             label_to_van[label] = v
