@@ -944,9 +944,9 @@ def render_reports() -> None:
         return
 
     try:
-        f1, f2 = st.columns([2, 2], vertical_alignment="bottom")
+        f1, f2, f3 = st.columns([2, 2, 1], vertical_alignment="bottom")
     except TypeError:
-        f1, f2 = st.columns([2, 2])
+        f1, f2, f3 = st.columns([2, 2, 1])
 
     with f1:
         search_q = st.text_input(
@@ -962,6 +962,14 @@ def render_reports() -> None:
             options=PROVIDER_OPTIONS,
             default=[],
             key="reports_provider_filter",
+        )
+
+    with f3:
+        sort_by = st.selectbox(
+            "Sort by",
+            options=["Date reported", "Time updated"],
+            index=0,
+            key="reports_sort",
         )
 
     rows = list(issues_for_reports)
@@ -986,6 +994,50 @@ def render_reports() -> None:
     if not rows:
         st.info("No issues match your filters.")
         return
+
+    def _parse_iso_datetime(value: str | None) -> datetime:
+        if not value:
+            return datetime.min
+        s = str(value).strip()
+        if not s:
+            return datetime.min
+        try:
+            # Accept common RFC3339 "Z" suffix.
+            if s.endswith("Z"):
+                s = s[:-1] + "+00:00"
+            return datetime.fromisoformat(s)
+        except Exception:
+            return datetime.min
+
+    def _parse_iso_date_or_min(value: str | None) -> date:
+        d = _parse_iso_date(str(value)) if value else None
+        return d or date.min
+
+    def _row_get(r: dict, key: str) -> str | None:
+        try:
+            v = r.get(key)
+        except Exception:
+            v = None
+        return None if v is None else str(v)
+
+    if sort_by == "Time updated":
+        rows.sort(
+            key=lambda r: (
+                _parse_iso_datetime(_row_get(r, "updated_at")),
+                _parse_iso_date_or_min(_row_get(r, "date_reported")),
+                _row_get(r, "id") or "",
+            ),
+            reverse=True,
+        )
+    else:
+        rows.sort(
+            key=lambda r: (
+                _parse_iso_date_or_min(_row_get(r, "date_reported")),
+                _parse_iso_datetime(_row_get(r, "updated_at")),
+                _row_get(r, "id") or "",
+            ),
+            reverse=True,
+        )
 
     table = []
     for r in rows:
