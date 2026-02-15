@@ -63,10 +63,6 @@ def _default_vans_list(start: int, end: int) -> list[str]:
     return [str(n) for n in range(start, end + 1)]
 
 def _update_van_meta(db, van_number: str, delta_open_issues: int) -> None:
-    """
-    Maintain per-van issue counters so we don't have to scan the entire issues collection
-    on every app rerun.
-    """
     van_number = str(van_number).strip()
     if not van_number:
         return
@@ -98,12 +94,6 @@ def _update_van_meta(db, van_number: str, delta_open_issues: int) -> None:
         _firestore_warn_once(f"updating van meta for {van_number}", e)
 
 def using_firestore() -> bool:
-    """
-    Firestore is enabled when a Firebase/GCP service account is present in Streamlit secrets.
-    Accepts either:
-      - st.secrets["firebase_service_account"]  (our original key)
-      - st.secrets["gcp_service_account"]       (Streamlit's common naming)
-    """
     try:
         if st.session_state.get("_force_sqlite"):
             return False
@@ -115,18 +105,12 @@ def using_firestore() -> bool:
 
 @st.cache_resource
 def get_firestore_client():
-    """
-    Expects st.secrets["firebase_service_account"] or st.secrets["gcp_service_account"] to be either:
-      - a dict (recommended), OR
-      - a JSON string (raw service account JSON).
-    """
     svc = st.secrets.get("firebase_service_account") or st.secrets.get("gcp_service_account")
     if not svc:
         raise KeyError("Missing firebase_service_account or gcp_service_account in Streamlit secrets.")
     if isinstance(svc, str):
         svc = json.loads(svc)
 
-    # Streamlit secrets sections are not plain dicts; Firebase Admin expects a real dict.
     if isinstance(svc, Mapping):
         def to_plain(obj):
             if isinstance(obj, Mapping):
@@ -142,9 +126,6 @@ def get_firestore_client():
 
     return firestore.client()
 
-# ----------------------------
-# DB helpers
-# ----------------------------
 def get_conn():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -160,6 +141,7 @@ def init_db():
             date_reported TEXT NOT NULL,         -- ISO date string
             problem_description TEXT NOT NULL,
             action TEXT,
+            at_service_provider INTEGER NOT NULL DEFAULT 0,  -- 0/1
             fix_date TEXT,                       -- ISO date string or NULL
             fix_by TEXT,
             grounded INTEGER NOT NULL DEFAULT 0,  -- 0/1
@@ -168,11 +150,12 @@ def init_db():
             updated_at TEXT NOT NULL
         )
     """)
-    # --- simple migration: add columns introduced after initial DB creation
     cur.execute("PRAGMA table_info(van_issues)")
-    existing_cols = {row[1] for row in cur.fetchall()}  # row[1] is column name
+    existing_cols = {row[1] for row in cur.fetchall()}
     if "unusable" not in existing_cols:
         cur.execute("ALTER TABLE van_issues ADD COLUMN unusable INTEGER NOT NULL DEFAULT 0;")
+    if "at_service_provider" not in existing_cols:
+        cur.execute("ALTER TABLE van_issues ADD COLUMN at_service_provider INTEGER NOT NULL DEFAULT 0;")
     conn.commit()
     conn.close()
 
@@ -194,7 +177,7 @@ def init_sqlite_vans(start: int = 1, end: int = 60):
     conn.commit()
     conn.close()
 
-def insert_issue(van_number, date_reported, problem_description, action, fix_date, fix_by, grounded, unusable):
+def insert_issue(van_number, date_reported, problem_description, action, at_service_provider, fix_date, fix_by, grounded, unusable):
     now = datetime.utcnow().isoformat()
     if using_firestore():
         try:
@@ -204,6 +187,7 @@ def insert_issue(van_number, date_reported, problem_description, action, fix_dat
                 "date_reported": date_reported.isoformat(),
                 "problem_description": problem_description.strip(),
                 "action": (action or "").strip(),
+                "at_service_provider": bool(at_service_provider),
                 "fix_date": fix_date.isoformat() if fix_date else None,
                 "fix_by": (fix_by or "").strip(),
                 "grounded": bool(grounded),
@@ -220,13 +204,14 @@ def insert_issue(van_number, date_reported, problem_description, action, fix_dat
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO van_issues
-        (van_number, date_reported, problem_description, action, fix_date, fix_by, grounded, unusable, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (van_number, date_reported, problem_description, action, at_service_provider, fix_date, fix_by, grounded, unusable, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         van_number.strip(),
         date_reported.isoformat(),
         problem_description.strip(),
         (action or "").strip(),
+        1 if at_service_provider else 0,
         fix_date.isoformat() if fix_date else None,
         (fix_by or "").strip(),
         1 if grounded else 0,
@@ -237,7 +222,7 @@ def insert_issue(van_number, date_reported, problem_description, action, fix_dat
     conn.commit()
     conn.close()
 
-def update_issue(issue_id, van_number, date_reported, problem_description, action, fix_date, fix_by, grounded, unusable):
+def update_issue(issue_id, van_number, date_reported, problem_description, action, at_service_provider, fix_date, fix_by, grounded, unusable):
     now = datetime.utcnow().isoformat()
     if using_firestore():
         try:
@@ -255,6 +240,7 @@ def update_issue(issue_id, van_number, date_reported, problem_description, actio
                 "date_reported": date_reported.isoformat(),
                 "problem_description": problem_description.strip(),
                 "action": (action or "").strip(),
+                "at_service_provider": bool(at_service_provider),
                 "fix_date": fix_date.isoformat() if fix_date else None,
                 "fix_by": (fix_by or "").strip(),
                 "grounded": bool(grounded),
@@ -276,6 +262,7 @@ def update_issue(issue_id, van_number, date_reported, problem_description, actio
             date_reported=?,
             problem_description=?,
             action=?,
+            at_service_provider=?,
             fix_date=?,
             fix_by=?,
             grounded=?,
@@ -287,6 +274,7 @@ def update_issue(issue_id, van_number, date_reported, problem_description, actio
         date_reported.isoformat(),
         problem_description.strip(),
         (action or "").strip(),
+        1 if at_service_provider else 0,
         fix_date.isoformat() if fix_date else None,
         (fix_by or "").strip(),
         1 if grounded else 0,
@@ -338,7 +326,6 @@ def fetch_issues(limit=200, backend: str = "sqlite"):
                 data["id"] = d.id
                 rows.append(data)
 
-            # Keep grounded/unusable at the top (similar intent to the SQLite ORDER BY)
             rows.sort(key=lambda r: (not bool(r.get("grounded")), not bool(r.get("unusable"))))
             return rows
         except Exception as e:
@@ -385,13 +372,7 @@ DEFAULT_VAN_START = 1
 DEFAULT_VAN_END = 60
 
 def init_vans(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END):
-    """
-    Ensure a persistent list of vans exists in the database.
-    SQLite: creates/seed `vans` table with van_number, active, available
-    Firestore: creates/seed `vans` collection with docs keyed by van_number
-    """
     if using_firestore():
-        # Avoid Firestore reads/writes during normal app startup; keep this callable for manual/admin usage only.
         db = get_firestore_client()
         try:
             batch = db.batch()
@@ -432,7 +413,6 @@ def init_vans(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END):
     conn.commit()
     conn.close()
 
-# ---- NEW VAN DATA HELPERS ----
 @st.cache_data(ttl=600)
 def fetch_all_vans(backend: str = "sqlite") -> list[str]:
     """Stored list of vans (numbers as strings)."""
@@ -509,7 +489,6 @@ def fetch_available_vans(backend: str = "sqlite") -> list[str]:
     unavailable = fetch_vans_with_issues(backend="sqlite")
     return [v for v in all_vans if v not in unavailable]
 
-# ---- VAN MANAGEMENT HELPERS ----
 def upsert_van(van_number: str):
     van_number = str(van_number).strip()
     if not van_number:
@@ -597,11 +576,6 @@ def fetch_all_vans_status(backend: str = "sqlite") -> list[dict]:
         })
     return rows
 
-
-
-# ----------------------------
-# UI
-# ----------------------------
 st.set_page_config(page_title="Van Issues Log", layout="wide")
 init_db()
 init_sqlite_vans()
@@ -727,6 +701,7 @@ def render_submit_query() -> None:
         default_date_reported = _parse_iso_date(edit_issue["date_reported"]) or date.today()
         default_problem = edit_issue["problem_description"]
         default_action = edit_issue["action"] or ""
+        default_at_service_provider = bool(edit_issue.get("at_service_provider"))
         default_fix_date = _parse_iso_date(edit_issue["fix_date"])
         default_fix_by = edit_issue["fix_by"] or ""
         default_grounded = bool(edit_issue["grounded"])
@@ -736,6 +711,7 @@ def render_submit_query() -> None:
         default_date_reported = date.today()
         default_problem = ""
         default_action = ""
+        default_at_service_provider = False
         default_fix_date = None
         default_fix_by = ""
         default_grounded = False
@@ -784,11 +760,10 @@ def render_submit_query() -> None:
         st.markdown("**Action**")
         action = st.text_area("", value=default_action, height=90, label_visibility="collapsed")
 
+        at_service_provider = st.checkbox("At service provider", value=default_at_service_provider)
+
         bottom = st.columns([2, 1, 2, 3])
         with bottom[0]:
-            st.markdown("**Fix Date**")
-            fix_date = st.date_input("fix_date", value=default_fix_date, label_visibility="collapsed")
-        with bottom[2]:
             st.markdown("**Provider**")
             fix_by_options = ["--Select option below--"] + PROVIDER_OPTIONS
 
@@ -801,6 +776,9 @@ def render_submit_query() -> None:
             )
             if fix_by == "--Select option below--":
                 fix_by = ""
+        with bottom[2]:
+            st.markdown("**Fix Date**")
+            fix_date = st.date_input("fix_date", value=default_fix_date, label_visibility="collapsed")
 
         b1, b2, _ = st.columns([1, 1, 6])
         save_disabled = (mode == "Edit existing" and not (isinstance(edit_issue, dict) and edit_issue.get("id")))
@@ -826,6 +804,7 @@ def render_submit_query() -> None:
                         date_reported,
                         problem_description,
                         action,
+                        at_service_provider,
                         fix_date,
                         fix_by,
                         grounded,
@@ -840,6 +819,7 @@ def render_submit_query() -> None:
                         date_reported,
                         problem_description,
                         action,
+                        at_service_provider,
                         fix_date,
                         fix_by,
                         grounded,
@@ -1009,7 +989,6 @@ def render_reports() -> None:
         if not s:
             return datetime.min
         try:
-            # Accept common RFC3339 "Z" suffix.
             if s.endswith("Z"):
                 s = s[:-1] + "+00:00"
             return datetime.fromisoformat(s)
@@ -1065,6 +1044,7 @@ def render_reports() -> None:
             "Date Reported": r.get("date_reported", "") if hasattr(r, "get") else r["date_reported"],
             "Grounded": "YES" if (r.get("grounded") if hasattr(r, "get") else r["grounded"]) else "NO",
             "Unusable": "YES" if (r.get("unusable") if hasattr(r, "get") else r["unusable"]) else "NO",
+            "At service provider": "YES" if (r.get("at_service_provider") if hasattr(r, "get") else r["at_service_provider"]) else "NO",
             "Fix Date": (r.get("fix_date") if hasattr(r, "get") else r["fix_date"]) or "",
             "Provider": (r.get("fix_by") if hasattr(r, "get") else r["fix_by"]) or "",
             "Problem": r.get("problem_description", "") if hasattr(r, "get") else r["problem_description"],
