@@ -21,6 +21,7 @@ VAN_META_HAS_ISSUE = "has_issue"
 VAN_META_OPEN_COUNT = "open_issues_count"
 REPORTS_LIMIT_FIRESTORE = 200
 REPORTS_LIMIT_SQLITE = 5000
+EDIT_LIMIT_FIRESTORE = 200
 
 def _is_firestore_quota_error(exc: Exception) -> bool:
     if isinstance(exc, (ResourceExhausted, TooManyRequests)):
@@ -700,16 +701,7 @@ def render_submit_query() -> None:
                     except Exception:
                         st.cache_data.clear()
             if st.session_state.get("load_issues_edit"):
-                with mode_col2:
-                    issues_limit = st.number_input(
-                        "Issues to load",
-                        min_value=50,
-                        max_value=2000,
-                        value=200,
-                        step=50,
-                        key="issues_limit_edit",
-                    )
-                issues_for_edit = fetch_issues(limit=int(issues_limit), backend="firestore")
+                issues_for_edit = fetch_issues(limit=EDIT_LIMIT_FIRESTORE, backend="firestore")
             else:
                 issues_for_edit = []
         else:
