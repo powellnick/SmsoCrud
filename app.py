@@ -98,8 +98,6 @@ def using_firestore() -> bool:
     try:
         if st.session_state.get("_force_sqlite"):
             return False
-        if bool(st.secrets.get("force_sqlite", False)):
-            return False
         return ("firebase_service_account" in st.secrets) or ("gcp_service_account" in st.secrets)
     except Exception:
         return False
