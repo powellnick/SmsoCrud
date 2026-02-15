@@ -655,18 +655,25 @@ if nav_to in SECTIONS:
 elif "active_section" not in st.session_state:
     st.session_state["active_section"] = "Submit query"
 
-try:
-    section_widget = getattr(st, "segmented_control")
-except Exception:
-    section_widget = None
+def _render_section_nav() -> None:
+    active = st.session_state.get("active_section") or SECTIONS[0]
+    cols = st.columns(len(SECTIONS))
+    for sec, col in zip(SECTIONS, cols):
+        with col:
+            try:
+                clicked = st.button(
+                    sec,
+                    use_container_width=True,
+                    type=("primary" if sec == active else "secondary"),
+                    key=f"nav_btn::{sec}",
+                )
+            except TypeError:
+                clicked = st.button(sec, use_container_width=True, key=f"nav_btn::{sec}")
+            if clicked:
+                st.session_state["active_section"] = sec
+                st.rerun()
 
-if callable(section_widget):
-    try:
-        st.segmented_control("Section", SECTIONS, key="active_section", label_visibility="collapsed")
-    except TypeError:
-        st.segmented_control("Section", SECTIONS, key="active_section")
-else:
-    st.radio("Section", SECTIONS, horizontal=True, key="active_section", label_visibility="collapsed")
+_render_section_nav()
 
 
 def render_submit_query() -> None:
