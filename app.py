@@ -1002,7 +1002,6 @@ def render_reports() -> None:
 
     df = pd.DataFrame(table)
     if _HAVE_AGGRID:
-        st.caption("Tip: Double-click a row to select it for editing, then open the “Submit query” tab.")
         gb = GridOptionsBuilder.from_dataframe(df)
         gb.configure_column("_issue_id", hide=True)
         gb.configure_selection(selection_mode="single", use_checkbox=False)
