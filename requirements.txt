@@ -1,2 +1,5 @@
 streamlit
 firebase-admin
+google-api-core
+pandas
+streamlit-aggrid
