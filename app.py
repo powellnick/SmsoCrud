@@ -6,6 +6,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from collections.abc import Mapping
 from google.api_core.retry import Retry
+from google.api_core.exceptions import AlreadyExists
 
 DB_PATH = "van_issues.db"
 FIRESTORE_TIMEOUT_S = 8.0
@@ -199,7 +200,7 @@ def delete_issue(issue_id):
     conn.commit()
     conn.close()
 
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=120)
 def fetch_issues(limit=200):
     if using_firestore():
         db = get_firestore_client()
@@ -271,20 +272,28 @@ def init_vans(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END):
     Firestore: creates/seed `vans` collection with docs keyed by van_number
     """
     if using_firestore():
+        # Avoid Firestore reads/writes during normal app startup; keep this callable for manual/admin usage only.
         db = get_firestore_client()
         try:
-            existing = list(db.collection(VANS_COLLECTION).limit(1).stream(**_fs_kwargs()))
-            if existing:
-                return
             batch = db.batch()
+            now = datetime.utcnow().isoformat()
             for n in range(start, end + 1):
                 ref = db.collection(VANS_COLLECTION).document(str(n))
-                batch.set(ref, {"van_number": str(n)})
+                batch.set(
+                    ref,
+                    {
+                        "van_number": str(n),
+                        VAN_META_OPEN_COUNT: 0,
+                        VAN_META_HAS_ISSUE: False,
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                    merge=True,
+                )
             batch.commit()
-            return
         except Exception as e:
             _firestore_warn_once("initializing vans", e)
-            return
+        return
 
     # SQLite
     conn = get_conn()
@@ -305,7 +314,7 @@ def init_vans(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END):
     conn.close()
 
 # ---- NEW VAN DATA HELPERS ----
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=600)
 def fetch_all_vans() -> list[str]:
     """Stored list of vans (numbers as strings)."""
     if using_firestore():
@@ -329,7 +338,7 @@ def fetch_all_vans() -> list[str]:
     conn.close()
     return vans
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=600)
 def fetch_vans_with_issues(limit: int = 5000) -> set[str]:
     """Set of van numbers that currently have at least one issue record."""
     if using_firestore():
@@ -354,7 +363,7 @@ def fetch_vans_with_issues(limit: int = 5000) -> set[str]:
     conn.close()
     return s
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=600)
 def fetch_available_vans() -> list[str]:
     """Available vans are those in the vans list that have 0 issue records."""
     all_vans = fetch_all_vans()
@@ -369,11 +378,24 @@ def upsert_van(van_number: str):
 
     if using_firestore():
         db = get_firestore_client()
-        db.collection(VANS_COLLECTION).document(van_number).set(
-            {"van_number": van_number},
-            merge=True,
-            **_fs_kwargs(),
-        )
+        ref = db.collection(VANS_COLLECTION).document(van_number)
+        now = datetime.utcnow().isoformat()
+        try:
+            ref.create(
+                {
+                    "van_number": van_number,
+                    VAN_META_OPEN_COUNT: 0,
+                    VAN_META_HAS_ISSUE: False,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+                **_fs_kwargs(),
+            )
+        except AlreadyExists:
+            # Don't overwrite status fields; just ensure the van_number stays present.
+            ref.set({"van_number": van_number, "updated_at": now}, merge=True, **_fs_kwargs())
+        except Exception as e:
+            _firestore_warn_once(f"upserting van {van_number}", e)
         return
 
     conn = get_conn()
@@ -399,7 +421,7 @@ def delete_van(van_number: str):
     conn.commit()
     conn.close()
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=600)
 def fetch_all_vans_status() -> list[dict]:
     vans = fetch_all_vans()
     unavailable = fetch_vans_with_issues()
@@ -427,23 +449,23 @@ st.caption(f"Backend: {'Firestore' if using_firestore() else 'SQLite'}")
 
 # Vans Debug UI block
 with st.expander("Vans (available vs unavailable)", expanded=False):
-    if st.button("Load vans status", key="load_vans_status", use_container_width=True):
-        st.session_state["show_vans_status"] = True
+    vans = fetch_all_vans_status()
+    available = [v for v in vans if v.get("Available")]
+    unavailable = [v for v in vans if not v.get("Available")]
 
-    if st.session_state.get("show_vans_status"):
-        vans = fetch_all_vans_status()
-        available = [v["Van"] for v in vans if v["Available"]]
-        unavailable = [v["Van"] for v in vans if not v["Available"]]
-
-        c1, c2, c3 = st.columns([2, 2, 1])
-        with c1:
-            st.markdown(f"**Available ({len(available)}):**")
-            st.write(", ".join(available) if available else "—")
-        with c2:
-            st.markdown(f"**Unavailable ({len(unavailable)}):**")
-            st.write(", ".join(unavailable) if unavailable else "—")
-    else:
-        st.info("Click “Load vans status” to query the backend.")
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        st.markdown(f"**Available ({len(available)}):**")
+        st.write(", ".join([v["Van"] for v in available]) if available else "—")
+    with c2:
+        st.markdown(f"**Unavailable ({len(unavailable)}):**")
+        formatted = []
+        for v in unavailable:
+            if "Open Issues" in v:
+                formatted.append(f'{v["Van"]} ({v["Open Issues"]})')
+            else:
+                formatted.append(v["Van"])
+        st.write(", ".join(formatted) if formatted else "—")
     
 with st.expander("Manage Vans (add / delete)", expanded=False):
 
@@ -470,45 +492,49 @@ with st.expander("Manage Vans (add / delete)", expanded=False):
 
     st.divider()
     st.markdown("Current vans list (click 🗑️ to delete a van number):")
-
-    if st.button("Load vans list", key="load_manage_vans", use_container_width=True):
-        st.session_state["show_manage_vans"] = True
-
-    if st.session_state.get("show_manage_vans"):
-        vans = fetch_all_vans()
-        unavailable_set = fetch_vans_with_issues()
-
-        if not vans:
-            st.info("No vans in the list yet.")
-        else:
-            # Header row
-            h1, h2, h3 = st.columns([2, 2, 1])
-            with h1:
-                st.markdown("**Van**")
-            with h2:
-                st.markdown("**Status**")
-            with h3:
-                st.markdown("**Delete**")
-
-            # One row per van with a trash button
-            for v in vans:
-                r1, r2, r3 = st.columns([2, 2, 1])
-                with r1:
-                    st.write(v)
-                with r2:
-                    st.write("Unavailable" if v in unavailable_set else "Available")
-                with r3:
-                    if st.button("🗑️", key=f"del_van_{v}", help=f"Delete van {v}"):
-                        delete_van(v)
-                        st.cache_data.clear()
-                        st.success(f"Deleted van {v}.")
-                        st.rerun()
+    vans_status = fetch_all_vans_status()
+    if not vans_status:
+        st.info("No vans in the list yet.")
     else:
-        st.info("Click “Load vans list” to query the backend.")
+        h1, h2, h3 = st.columns([2, 2, 1])
+        with h1:
+            st.markdown("**Van**")
+        with h2:
+            st.markdown("**Status**")
+        with h3:
+            st.markdown("**Delete**")
+
+        for row in vans_status:
+            v = row.get("Van", "")
+            status = "Available" if row.get("Available") else "Unavailable"
+            if "Open Issues" in row and not row.get("Available"):
+                status = f'{status} ({row["Open Issues"]})'
+
+            r1, r2, r3 = st.columns([2, 2, 1])
+            with r1:
+                st.write(v)
+            with r2:
+                st.write(status)
+            with r3:
+                if st.button("🗑️", key=f"del_van_{v}", help=f"Delete van {v}"):
+                    delete_van(v)
+                    st.cache_data.clear()
+                    st.success(f"Deleted van {v}.")
+                    st.rerun()
 
 # Two modes: Create new or Edit existing
-ISSUES_LIMIT_DEFAULT = 500 if using_firestore() else 5000
-issues = fetch_issues(limit=ISSUES_LIMIT_DEFAULT)
+if using_firestore():
+    if st.button("Load issues from Firestore", key="load_issues_btn", use_container_width=True):
+        st.session_state["load_issues"] = True
+    load_issues = bool(st.session_state.get("load_issues"))
+    if load_issues:
+        issues_limit = st.number_input("Issues to load", min_value=50, max_value=2000, value=200, step=50)
+        issues = fetch_issues(limit=int(issues_limit))
+    else:
+        issues = []
+else:
+    issues = fetch_issues(limit=5000)
+
 issue_map = {f"#{r['id']} | Van {r['van_number']} | Reported {r['date_reported']}" : r["id"] for r in issues}
 
 mode_col1, mode_col2 = st.columns([2, 3])
