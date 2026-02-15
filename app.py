@@ -6,7 +6,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 from collections.abc import Mapping
 from google.api_core.retry import Retry
-from google.api_core.exceptions import AlreadyExists
+from google.api_core.exceptions import AlreadyExists, ResourceExhausted, RetryError, TooManyRequests
 
 DB_PATH = "van_issues.db"
 FIRESTORE_TIMEOUT_S = 8.0
@@ -14,7 +14,29 @@ FIRESTORE_RETRY = Retry(deadline=FIRESTORE_TIMEOUT_S)
 VAN_META_HAS_ISSUE = "has_issue"
 VAN_META_OPEN_COUNT = "open_issues_count"
 
+def _is_firestore_quota_error(exc: Exception) -> bool:
+    if isinstance(exc, (ResourceExhausted, TooManyRequests)):
+        return True
+    msg = str(exc).lower()
+    if "quota" in msg and ("exceed" in msg or "exceeded" in msg):
+        return True
+    if "429" in msg and ("quota" in msg or "too many requests" in msg):
+        return True
+    return False
+
+def _disable_firestore_for_session(reason: str, exc: Exception | None = None) -> None:
+    if st.session_state.get("_force_sqlite"):
+        return
+    st.session_state["_force_sqlite"] = True
+    st.cache_data.clear()
+    msg = f"Firestore unavailable ({reason}). Switching to SQLite for this session."
+    if exc is not None:
+        msg += f" ({type(exc).__name__}: {exc})"
+    st.warning(msg)
+
 def _firestore_warn_once(context: str, exc: Exception) -> None:
+    if _is_firestore_quota_error(exc) or isinstance(exc, RetryError):
+        _disable_firestore_for_session("quota/temporary error", exc)
     key = f"_firestore_warned::{context}"
     if st.session_state.get(key):
         return
@@ -74,6 +96,8 @@ def using_firestore() -> bool:
       - st.secrets["gcp_service_account"]       (Streamlit's common naming)
     """
     try:
+        if st.session_state.get("_force_sqlite"):
+            return False
         return ("firebase_service_account" in st.secrets) or ("gcp_service_account" in st.secrets)
     except Exception:
         return False
@@ -116,8 +140,6 @@ def get_conn():
     return conn
 
 def init_db():
-    if using_firestore():
-        return
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -143,25 +165,46 @@ def init_db():
     conn.commit()
     conn.close()
 
+def init_sqlite_vans(start: int = 1, end: int = 60):
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS vans (
+            van_number TEXT PRIMARY KEY
+        )
+    """)
+    cur.execute("SELECT COUNT(*) FROM vans")
+    count = cur.fetchone()[0]
+    if count == 0:
+        cur.executemany(
+            "INSERT INTO vans (van_number) VALUES (?)",
+            [(str(n),) for n in range(start, end + 1)]
+        )
+    conn.commit()
+    conn.close()
+
 def insert_issue(van_number, date_reported, problem_description, action, fix_date, fix_by, grounded, unusable):
     now = datetime.utcnow().isoformat()
     if using_firestore():
-        db = get_firestore_client()
-        doc = {
-            "van_number": van_number.strip(),
-            "date_reported": date_reported.isoformat(),
-            "problem_description": problem_description.strip(),
-            "action": (action or "").strip(),
-            "fix_date": fix_date.isoformat() if fix_date else None,
-            "fix_by": (fix_by or "").strip(),
-            "grounded": bool(grounded),
-            "unusable": bool(unusable),
-            "created_at": now,
-            "updated_at": now,
-        }
-        db.collection("van_issues").add(doc, **_fs_kwargs())
-        _update_van_meta(db, van_number, +1)
-        return
+        try:
+            db = get_firestore_client()
+            doc = {
+                "van_number": van_number.strip(),
+                "date_reported": date_reported.isoformat(),
+                "problem_description": problem_description.strip(),
+                "action": (action or "").strip(),
+                "fix_date": fix_date.isoformat() if fix_date else None,
+                "fix_by": (fix_by or "").strip(),
+                "grounded": bool(grounded),
+                "unusable": bool(unusable),
+                "created_at": now,
+                "updated_at": now,
+            }
+            db.collection("van_issues").add(doc, **_fs_kwargs())
+            _update_van_meta(db, van_number, +1)
+            return
+        except Exception as e:
+            _firestore_warn_once("saving issue", e)
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -186,31 +229,34 @@ def insert_issue(van_number, date_reported, problem_description, action, fix_dat
 def update_issue(issue_id, van_number, date_reported, problem_description, action, fix_date, fix_by, grounded, unusable):
     now = datetime.utcnow().isoformat()
     if using_firestore():
-        db = get_firestore_client()
-        old_van_number = None
         try:
-            snap = db.collection("van_issues").document(str(issue_id)).get(**_fs_kwargs())
-            if snap.exists:
-                old_van_number = (snap.to_dict() or {}).get("van_number")
-        except Exception as e:
-            _firestore_warn_once(f"loading issue #{issue_id} for update", e)
+            db = get_firestore_client()
+            old_van_number = None
+            try:
+                snap = db.collection("van_issues").document(str(issue_id)).get(**_fs_kwargs())
+                if snap.exists:
+                    old_van_number = (snap.to_dict() or {}).get("van_number")
+            except Exception as e:
+                _firestore_warn_once(f"loading issue #{issue_id} for update", e)
 
-        doc = {
-            "van_number": van_number.strip(),
-            "date_reported": date_reported.isoformat(),
-            "problem_description": problem_description.strip(),
-            "action": (action or "").strip(),
-            "fix_date": fix_date.isoformat() if fix_date else None,
-            "fix_by": (fix_by or "").strip(),
-            "grounded": bool(grounded),
-            "unusable": bool(unusable),
-            "updated_at": now,
-        }
-        db.collection("van_issues").document(str(issue_id)).set(doc, merge=True, **_fs_kwargs())
-        if old_van_number and str(old_van_number).strip() != str(van_number).strip():
-            _update_van_meta(db, old_van_number, -1)
-            _update_van_meta(db, van_number, +1)
-        return
+            doc = {
+                "van_number": van_number.strip(),
+                "date_reported": date_reported.isoformat(),
+                "problem_description": problem_description.strip(),
+                "action": (action or "").strip(),
+                "fix_date": fix_date.isoformat() if fix_date else None,
+                "fix_by": (fix_by or "").strip(),
+                "grounded": bool(grounded),
+                "unusable": bool(unusable),
+                "updated_at": now,
+            }
+            db.collection("van_issues").document(str(issue_id)).set(doc, merge=True, **_fs_kwargs())
+            if old_van_number and str(old_van_number).strip() != str(van_number).strip():
+                _update_van_meta(db, old_van_number, -1)
+                _update_van_meta(db, van_number, +1)
+            return
+        except Exception as e:
+            _firestore_warn_once(f"updating issue #{issue_id}", e)
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -242,18 +288,21 @@ def update_issue(issue_id, van_number, date_reported, problem_description, actio
 
 def delete_issue(issue_id):
     if using_firestore():
-        db = get_firestore_client()
-        van_number = None
         try:
-            snap = db.collection(ISSUES_COLLECTION).document(str(issue_id)).get(**_fs_kwargs())
-            if snap.exists:
-                van_number = (snap.to_dict() or {}).get("van_number")
+            db = get_firestore_client()
+            van_number = None
+            try:
+                snap = db.collection(ISSUES_COLLECTION).document(str(issue_id)).get(**_fs_kwargs())
+                if snap.exists:
+                    van_number = (snap.to_dict() or {}).get("van_number")
+            except Exception as e:
+                _firestore_warn_once(f"loading issue #{issue_id} for delete", e)
+            db.collection(ISSUES_COLLECTION).document(str(issue_id)).delete(**_fs_kwargs())
+            if van_number:
+                _update_van_meta(db, van_number, -1)
+            return
         except Exception as e:
-            _firestore_warn_once(f"loading issue #{issue_id} for delete", e)
-        db.collection(ISSUES_COLLECTION).document(str(issue_id)).delete(**_fs_kwargs())
-        if van_number:
-            _update_van_meta(db, van_number, -1)
-        return
+            _firestore_warn_once(f"deleting issue #{issue_id}", e)
 
     conn = get_conn()
     cur = conn.cursor()
@@ -264,8 +313,8 @@ def delete_issue(issue_id):
 @st.cache_data(ttl=120)
 def fetch_issues(limit=200):
     if using_firestore():
-        db = get_firestore_client()
         try:
+            db = get_firestore_client()
             docs = (
                 db.collection("van_issues")
                   .order_by("date_reported", direction=firestore.Query.DESCENDING)
@@ -283,7 +332,6 @@ def fetch_issues(limit=200):
             return rows
         except Exception as e:
             _firestore_warn_once("loading issues", e)
-            return []
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
@@ -301,8 +349,8 @@ def fetch_issues(limit=200):
 
 def fetch_issue_by_id(issue_id):
     if using_firestore():
-        db = get_firestore_client()
         try:
+            db = get_firestore_client()
             snap = db.collection("van_issues").document(str(issue_id)).get(**_fs_kwargs())
             if not snap.exists:
                 return None
@@ -311,7 +359,6 @@ def fetch_issue_by_id(issue_id):
             return data
         except Exception as e:
             _firestore_warn_once(f"loading issue #{issue_id}", e)
-            return None
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("SELECT * FROM van_issues WHERE id=?", (issue_id,))
@@ -379,8 +426,8 @@ def init_vans(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END):
 def fetch_all_vans() -> list[str]:
     """Stored list of vans (numbers as strings)."""
     if using_firestore():
-        db = get_firestore_client()
         try:
+            db = get_firestore_client()
             docs = db.collection(VANS_COLLECTION).stream(**_fs_kwargs())
             vans = []
             for d in docs:
@@ -390,7 +437,6 @@ def fetch_all_vans() -> list[str]:
             return vans
         except Exception as e:
             _firestore_warn_once("loading vans list", e)
-            return []
 
     conn = get_conn()
     cur = conn.cursor()
@@ -403,8 +449,8 @@ def fetch_all_vans() -> list[str]:
 def fetch_vans_with_issues(limit: int = 5000) -> set[str]:
     """Set of van numbers that currently have at least one issue record."""
     if using_firestore():
-        db = get_firestore_client()
         try:
+            db = get_firestore_client()
             docs = (
                 db.collection(VANS_COLLECTION)
                   .where(VAN_META_HAS_ISSUE, "==", True)
@@ -419,7 +465,6 @@ def fetch_vans_with_issues(limit: int = 5000) -> set[str]:
             return s
         except Exception as e:
             _firestore_warn_once("loading vans-with-issues", e)
-            return set()
 
     conn = get_conn()
     cur = conn.cursor()
@@ -432,8 +477,8 @@ def fetch_vans_with_issues(limit: int = 5000) -> set[str]:
 def fetch_available_vans() -> list[str]:
     """Available vans are those in the vans list that have 0 issue records."""
     if using_firestore():
-        db = get_firestore_client()
         try:
+            db = get_firestore_client()
             docs = db.collection(VANS_COLLECTION).stream(**_fs_kwargs())
             vans: list[str] = []
             for d in docs:
@@ -460,10 +505,10 @@ def upsert_van(van_number: str):
         return
 
     if using_firestore():
-        db = get_firestore_client()
-        ref = db.collection(VANS_COLLECTION).document(van_number)
-        now = datetime.utcnow().isoformat()
         try:
+            db = get_firestore_client()
+            ref = db.collection(VANS_COLLECTION).document(van_number)
+            now = datetime.utcnow().isoformat()
             ref.create(
                 {
                     "van_number": van_number,
@@ -494,8 +539,12 @@ def delete_van(van_number: str):
         return
 
     if using_firestore():
-        db = get_firestore_client()
-        db.collection(VANS_COLLECTION).document(van_number).delete(**_fs_kwargs())
+        try:
+            db = get_firestore_client()
+            db.collection(VANS_COLLECTION).document(van_number).delete(**_fs_kwargs())
+            return
+        except Exception as e:
+            _firestore_warn_once(f"deleting van {van_number}", e)
         return
 
     conn = get_conn()
@@ -507,8 +556,8 @@ def delete_van(van_number: str):
 @st.cache_data(ttl=600)
 def fetch_all_vans_status() -> list[dict]:
     if using_firestore():
-        db = get_firestore_client()
         try:
+            db = get_firestore_client()
             docs = db.collection(VANS_COLLECTION).stream(**_fs_kwargs())
             rows: list[dict] = []
             for d in docs:
@@ -525,7 +574,7 @@ def fetch_all_vans_status() -> list[dict]:
             return rows
         except Exception as e:
             _firestore_warn_once("loading vans status", e)
-            return [{"Van": vn, "Available": True, "Open Issues": 0} for vn in _default_vans_list(DEFAULT_VAN_START, DEFAULT_VAN_END)]
+            # Fallback to SQLite status below if possible.
 
     vans = fetch_all_vans()
     unavailable = fetch_vans_with_issues()
@@ -544,8 +593,7 @@ def fetch_all_vans_status() -> list[dict]:
 # ----------------------------
 st.set_page_config(page_title="Van Issues Log", layout="wide")
 init_db()
-if not using_firestore():
-    init_vans()
+init_sqlite_vans()
 
 st.title("REPORT VAN ISSUE")
 
