@@ -102,7 +102,6 @@ def insert_issue(van_number, date_reported, problem_description, action, fix_dat
             "updated_at": now,
         }
         db.collection("van_issues").add(doc)
-        set_van_has_issue(van_number.strip(), True)
         return
     conn = get_conn()
     cur = conn.cursor()
@@ -127,10 +126,6 @@ def insert_issue(van_number, date_reported, problem_description, action, fix_dat
 
 def update_issue(issue_id, van_number, date_reported, problem_description, action, fix_date, fix_by, grounded, unusable):
     now = datetime.utcnow().isoformat()
-    old_van = None
-    existing = fetch_issue_by_id(issue_id)
-    if existing:
-     old_van = existing.get("van_number") if hasattr(existing, "get") else existing["van_number"]
     if using_firestore():
         db = get_firestore_client()
         doc = {
@@ -145,9 +140,6 @@ def update_issue(issue_id, van_number, date_reported, problem_description, actio
             "updated_at": now,
         }
         db.collection("van_issues").document(str(issue_id)).set(doc, merge=True)
-        set_van_has_issue(van_number.strip(), True)
-        if old_van and str(old_van).strip() and str(old_van).strip() != van_number.strip():
-             recompute_van_has_issue_firestore(str(old_van).strip())
         return
     conn = get_conn()
     cur = conn.cursor()
@@ -180,16 +172,8 @@ def update_issue(issue_id, van_number, date_reported, problem_description, actio
 
 def delete_issue(issue_id):
     if using_firestore():
-        issue = fetch_issue_by_id(issue_id)
-        van_num = None
-        if issue:
-            van_num = issue.get("van_number") if hasattr(issue, "get") else issue["van_number"]
-
         db = get_firestore_client()
         db.collection(ISSUES_COLLECTION).document(str(issue_id)).delete()
-
-        if van_num:
-            recompute_van_has_issue_firestore(str(van_num).strip())
         return
 
     conn = get_conn()
@@ -257,22 +241,18 @@ DEFAULT_VAN_END = 60
 def init_vans(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END):
     """
     Ensure a persistent list of vans exists in the database.
-    SQLite: creates/seed `vans` table with van_number
+    SQLite: creates/seed `vans` table with van_number, active, available
     Firestore: creates/seed `vans` collection with docs keyed by van_number
-              and denormalized `has_issue` flag (avoids scanning van_issues).
     """
     if using_firestore():
         db = get_firestore_client()
-
-        # Cheap existence check (single document read), avoids query overhead/quota
-        probe = db.collection(VANS_COLLECTION).document(str(start)).get()
-        if probe.exists:
+        existing = list(db.collection(VANS_COLLECTION).limit(1).stream())
+        if existing:
             return
-
         batch = db.batch()
         for n in range(start, end + 1):
             ref = db.collection(VANS_COLLECTION).document(str(n))
-            batch.set(ref, {"van_number": str(n), "has_issue": False})
+            batch.set(ref, {"van_number": str(n)})
         batch.commit()
         return
 
@@ -294,38 +274,7 @@ def init_vans(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END):
     conn.commit()
     conn.close()
 
-
-def set_van_has_issue(van_number: str, has_issue: bool):
-    """
-    Firestore-only: store a denormalized flag on each van doc
-    so we don't have to scan van_issues every rerun.
-    """
-    van_number = str(van_number).strip()
-    if not van_number or not using_firestore():
-        return
-    db = get_firestore_client()
-    db.collection(VANS_COLLECTION).document(van_number).set(
-        {"van_number": van_number, "has_issue": bool(has_issue)},
-        merge=True
-    )
-
-
-def recompute_van_has_issue_firestore(van_number: str):
-    """
-    Firestore-only: recompute has_issue by checking for any issue (limit 1).
-    """
-    van_number = str(van_number).strip()
-    if not van_number or not using_firestore():
-        return
-    db = get_firestore_client()
-    any_issue = next(
-        iter(db.collection(ISSUES_COLLECTION).where("van_number", "==", van_number).limit(1).stream()),
-        None
-    )
-    set_van_has_issue(van_number, has_issue=(any_issue is not None))
-
-
-@st.cache_data(ttl=15)
+# ---- NEW VAN DATA HELPERS ----
 def fetch_all_vans() -> list[str]:
     """Stored list of vans (numbers as strings)."""
     if using_firestore():
@@ -345,18 +294,17 @@ def fetch_all_vans() -> list[str]:
     conn.close()
     return vans
 
-
 def fetch_vans_with_issues(limit: int = 5000) -> set[str]:
     """Set of van numbers that currently have at least one issue record."""
     if using_firestore():
-        # ✅ DO NOT scan van_issues. Derive from vans.has_issue instead.
         db = get_firestore_client()
-        docs = db.collection(VANS_COLLECTION).stream()
+        docs = db.collection(ISSUES_COLLECTION).limit(limit).stream()
         s = set()
         for d in docs:
             data = d.to_dict() or {}
-            if bool(data.get("has_issue", False)):
-                s.add(str(data.get("van_number", d.id)))
+            vn = data.get("van_number")
+            if vn:
+                s.add(str(vn))
         return s
 
     conn = get_conn()
@@ -366,27 +314,8 @@ def fetch_vans_with_issues(limit: int = 5000) -> set[str]:
     conn.close()
     return s
 
-
-@st.cache_data(ttl=10)
 def fetch_available_vans() -> list[str]:
-    """
-    Availability is assumed unless an issue exists.
-    Firestore: available if vans.has_issue != True (missing treated as False).
-    SQLite: derived by subtracting vans with issues.
-    """
-    if using_firestore():
-        db = get_firestore_client()
-        docs = db.collection(VANS_COLLECTION).stream()
-        vans = []
-        for d in docs:
-            data = d.to_dict() or {}
-            van = str(data.get("van_number", d.id))
-            has_issue = bool(data.get("has_issue", False))
-            if not has_issue:
-                vans.append(van)
-        vans.sort(key=lambda x: int(x) if str(x).isdigit() else 10**9)
-        return vans
-
+    """Available vans are those in the vans list that have 0 issue records."""
     all_vans = fetch_all_vans()
     unavailable = fetch_vans_with_issues()
     return [v for v in all_vans if v not in unavailable]
@@ -487,10 +416,6 @@ with st.expander("Manage Vans (add / delete)", expanded=False):
             st.warning("No valid van numbers found. Please enter numbers like: 62, 64")
         else:
             st.success(f"Added {added} van(s).")
-            fetch_all_vans.clear()
-            fetch_available_vans.clear()
-            fetch_all_vans_status.clear()
-            fetch_vans_with_issues.clear()
             st.rerun()
 
     st.divider()
@@ -522,10 +447,6 @@ with st.expander("Manage Vans (add / delete)", expanded=False):
                 if st.button("🗑️", key=f"del_van_{v}", help=f"Delete van {v}"):
                     delete_van(v)
                     st.success(f"Deleted van {v}.")
-                    fetch_all_vans.clear()
-                    fetch_available_vans.clear()
-                    fetch_all_vans_status.clear()
-                    fetch_vans_with_issues.clear()
                     st.rerun()
 
 # Two modes: Create new or Edit existing
@@ -691,20 +612,12 @@ with st.form("van_issue_form", clear_on_submit=(mode == "Create new")):
                     unusable
                 )
                 st.success(f"Updated issue #{edit_issue['id']}.")
-          
-            fetch_all_vans.clear()
-            fetch_available_vans.clear()
-            fetch_all_vans_status.clear()
-            fetch_vans_with_issues.clear()
+
             st.rerun()
 
     if delete_btn and edit_issue:
         delete_issue(edit_issue["id"])
         st.success(f"Deleted issue #{edit_issue['id']}.")
-        fetch_all_vans.clear()
-        fetch_available_vans.clear()
-        fetch_all_vans_status.clear()
-        fetch_vans_with_issues.clear()
         st.rerun()
 
 
@@ -729,7 +642,7 @@ with f2:
         default=[]
     )
 
-rows = fetch_issues(limit=500)
+rows = fetch_issues(limit=5000)
 
 # Apply filters
 def norm(s):
