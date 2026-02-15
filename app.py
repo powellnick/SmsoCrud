@@ -967,7 +967,7 @@ def render_reports() -> None:
     with f3:
         sort_by = st.selectbox(
             "Sort by",
-            options=["Date reported", "Time updated"],
+            options=["Date reported", "Time updated", "Fix date"],
             index=0,
             key="reports_sort",
         )
@@ -1025,6 +1025,16 @@ def render_reports() -> None:
             key=lambda r: (
                 _parse_iso_datetime(_row_get(r, "updated_at")),
                 _parse_iso_date_or_min(_row_get(r, "date_reported")),
+                _row_get(r, "id") or "",
+            ),
+            reverse=True,
+        )
+    elif sort_by == "Fix date":
+        rows.sort(
+            key=lambda r: (
+                _parse_iso_date_or_min(_row_get(r, "fix_date")),
+                _parse_iso_date_or_min(_row_get(r, "date_reported")),
+                _parse_iso_datetime(_row_get(r, "updated_at")),
                 _row_get(r, "id") or "",
             ),
             reverse=True,
