@@ -699,6 +699,19 @@ def render_submit_query() -> None:
                         fetch_issues.clear()
                     except Exception:
                         st.cache_data.clear()
+            if st.session_state.get("load_issues_edit"):
+                with mode_col2:
+                    issues_limit = st.number_input(
+                        "Issues to load",
+                        min_value=50,
+                        max_value=2000,
+                        value=200,
+                        step=50,
+                        key="issues_limit_edit",
+                    )
+                issues_for_edit = fetch_issues(limit=int(issues_limit), backend="firestore")
+            else:
+                issues_for_edit = []
         else:
             issues_for_edit = fetch_issues(limit=5000, backend="sqlite")
 
