@@ -796,8 +796,9 @@ def render_submit_query() -> None:
                 fix_by = ""
 
         b1, b2, _ = st.columns([1, 1, 6])
+        save_disabled = (mode == "Edit existing" and not (isinstance(edit_issue, dict) and edit_issue.get("id")))
         with b1:
-            save = st.form_submit_button("Save")
+            save = st.form_submit_button("Save", disabled=save_disabled)
         with b2:
             delete_btn = st.form_submit_button("Delete", disabled=(mode != "Edit existing" or not edit_issue))
 
@@ -807,6 +808,8 @@ def render_submit_query() -> None:
                 errors.append("Van number is required.")
             if not problem_description.strip():
                 errors.append("Problem description is required.")
+            if mode == "Edit existing" and not (isinstance(edit_issue, dict) and edit_issue.get("id")):
+                errors.append("Select an issue to edit first.")
             if errors:
                 st.error(" ".join(errors))
             else:
