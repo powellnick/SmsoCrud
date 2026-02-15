@@ -98,6 +98,8 @@ def using_firestore() -> bool:
     try:
         if st.session_state.get("_force_sqlite"):
             return False
+        if bool(st.secrets.get("force_sqlite", False)):
+            return False
         return ("firebase_service_account" in st.secrets) or ("gcp_service_account" in st.secrets)
     except Exception:
         return False
@@ -311,7 +313,7 @@ def delete_issue(issue_id):
     conn.close()
 
 @st.cache_data(ttl=120)
-def fetch_issues(limit=200):
+def fetch_issues(limit=200, backend: str = "sqlite"):
     if using_firestore():
         try:
             db = get_firestore_client()
@@ -423,7 +425,7 @@ def init_vans(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END):
 
 # ---- NEW VAN DATA HELPERS ----
 @st.cache_data(ttl=600)
-def fetch_all_vans() -> list[str]:
+def fetch_all_vans(backend: str = "sqlite") -> list[str]:
     """Stored list of vans (numbers as strings)."""
     if using_firestore():
         try:
@@ -446,7 +448,7 @@ def fetch_all_vans() -> list[str]:
     return vans
 
 @st.cache_data(ttl=600)
-def fetch_vans_with_issues(limit: int = 5000) -> set[str]:
+def fetch_vans_with_issues(limit: int = 5000, backend: str = "sqlite") -> set[str]:
     """Set of van numbers that currently have at least one issue record."""
     if using_firestore():
         try:
@@ -474,7 +476,7 @@ def fetch_vans_with_issues(limit: int = 5000) -> set[str]:
     return s
 
 @st.cache_data(ttl=600)
-def fetch_available_vans() -> list[str]:
+def fetch_available_vans(backend: str = "sqlite") -> list[str]:
     """Available vans are those in the vans list that have 0 issue records."""
     if using_firestore():
         try:
@@ -494,8 +496,8 @@ def fetch_available_vans() -> list[str]:
             _firestore_warn_once("loading available vans", e)
             return _default_vans_list(DEFAULT_VAN_START, DEFAULT_VAN_END)
 
-    all_vans = fetch_all_vans()
-    unavailable = fetch_vans_with_issues()
+    all_vans = fetch_all_vans(backend="sqlite")
+    unavailable = fetch_vans_with_issues(backend="sqlite")
     return [v for v in all_vans if v not in unavailable]
 
 # ---- VAN MANAGEMENT HELPERS ----
@@ -554,7 +556,7 @@ def delete_van(van_number: str):
     conn.close()
 
 @st.cache_data(ttl=600)
-def fetch_all_vans_status() -> list[dict]:
+def fetch_all_vans_status(backend: str = "sqlite") -> list[dict]:
     if using_firestore():
         try:
             db = get_firestore_client()
@@ -576,8 +578,8 @@ def fetch_all_vans_status() -> list[dict]:
             _firestore_warn_once("loading vans status", e)
             # Fallback to SQLite status below if possible.
 
-    vans = fetch_all_vans()
-    unavailable = fetch_vans_with_issues()
+    vans = fetch_all_vans(backend="sqlite")
+    unavailable = fetch_vans_with_issues(backend="sqlite")
     rows = []
     for v in vans:
         rows.append({
@@ -601,7 +603,7 @@ st.caption(f"Backend: {'Firestore' if using_firestore() else 'SQLite'}")
 
 # Vans Debug UI block
 with st.expander("Vans (available vs unavailable)", expanded=False):
-    vans = fetch_all_vans_status()
+    vans = fetch_all_vans_status(backend=("firestore" if using_firestore() else "sqlite"))
     available = [v for v in vans if v.get("Available")]
     unavailable = [v for v in vans if not v.get("Available")]
 
@@ -648,7 +650,7 @@ with st.expander("Manage Vans (add / delete)", expanded=False):
 
     st.divider()
     st.markdown("**Delete a van**")
-    vans_status = fetch_all_vans_status()
+    vans_status = fetch_all_vans_status(backend=("firestore" if using_firestore() else "sqlite"))
     if not vans_status:
         st.info("No vans in the list yet.")
     else:
@@ -689,14 +691,18 @@ with st.expander("Manage Vans (add / delete)", expanded=False):
 if using_firestore():
     if st.button("Load issues from Firestore", key="load_issues_btn", use_container_width=True):
         st.session_state["load_issues"] = True
+        try:
+            fetch_issues.clear()
+        except Exception:
+            st.cache_data.clear()
     load_issues = bool(st.session_state.get("load_issues"))
     if load_issues:
         issues_limit = st.number_input("Issues to load", min_value=50, max_value=2000, value=200, step=50)
-        issues = fetch_issues(limit=int(issues_limit))
+        issues = fetch_issues(limit=int(issues_limit), backend="firestore")
     else:
         issues = []
 else:
-    issues = fetch_issues(limit=5000)
+    issues = fetch_issues(limit=5000, backend="sqlite")
 
 issue_map: dict[str, str] = {}
 _label_counts: dict[str, int] = {}
@@ -769,7 +775,7 @@ with st.form("van_issue_form", clear_on_submit=(mode == "Create new")):
         with c1:
             st.markdown("**Van**")
         with c2:
-            available_vans = fetch_available_vans()
+            available_vans = fetch_available_vans(backend=("firestore" if using_firestore() else "sqlite"))
             if mode == "Edit existing" and default_van and default_van not in available_vans:
                 van_options = ["--Select van--"] + [default_van] + [v for v in available_vans if v != default_van]
             else:
