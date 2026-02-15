@@ -653,7 +653,16 @@ _render_section_nav()
 def render_submit_query() -> None:
     mode_col1, mode_col2 = st.columns([2, 3])
     with mode_col1:
-        mode = st.radio("Mode", ["Create new", "Edit existing"], horizontal=True, key="submit_mode")
+        try:
+            mode = st.radio(
+                "Mode",
+                ["Create new", "Edit existing"],
+                horizontal=True,
+                key="submit_mode",
+                label_visibility="collapsed",
+            )
+        except TypeError:
+            mode = st.radio("Mode", ["Create new", "Edit existing"], horizontal=True, key="submit_mode")
 
         if st.session_state.get("edit_issue_id"):
             if st.button("Clear selected issue", use_container_width=True, key="clear_selected_issue_btn"):
