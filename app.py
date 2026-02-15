@@ -19,6 +19,8 @@ FIRESTORE_TIMEOUT_S = 8.0
 FIRESTORE_RETRY = Retry(deadline=FIRESTORE_TIMEOUT_S)
 VAN_META_HAS_ISSUE = "has_issue"
 VAN_META_OPEN_COUNT = "open_issues_count"
+REPORTS_LIMIT_FIRESTORE = 200
+REPORTS_LIMIT_SQLITE = 5000
 
 def _is_firestore_quota_error(exc: Exception) -> bool:
     if isinstance(exc, (ResourceExhausted, TooManyRequests)):
@@ -944,17 +946,9 @@ def render_reports() -> None:
     issues_for_reports: list[dict]
 
     if using_firestore():
-        issues_limit = st.number_input(
-            "Issues to load",
-            min_value=50,
-            max_value=2000,
-            value=200,
-            step=50,
-            key="issues_limit_reports",
-        )
-        issues_for_reports = fetch_issues(limit=int(issues_limit), backend="firestore")
+        issues_for_reports = fetch_issues(limit=REPORTS_LIMIT_FIRESTORE, backend="firestore")
     else:
-        issues_for_reports = fetch_issues(limit=5000, backend="sqlite")
+        issues_for_reports = fetch_issues(limit=REPORTS_LIMIT_SQLITE, backend="sqlite")
 
     if not issues_for_reports:
         return
