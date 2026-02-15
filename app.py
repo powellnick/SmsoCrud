@@ -629,7 +629,7 @@ with st.expander("Manage Vans (add / delete)", expanded=False):
     except TypeError:
         c1, c2 = st.columns([3, 1])
     with c1:
-        new_vans_text = st.text_input("Add van numbers", placeholder="Example: 62, 64", label_visibility="collapsed")
+        new_vans_text = st.text_input("Add van numbers", placeholder="Example: 5, 64", label_visibility="collapsed")
     with c2:
         add_btn = st.button("Add", use_container_width=True)
 
