@@ -367,6 +367,7 @@ def fetch_issue_by_id(issue_id):
 
 
 VANS_COLLECTION = "vans"
+VANS_META_DOC_ID = "__meta__"
 ISSUES_COLLECTION = "van_issues"
 DEFAULT_VAN_START = 1
 DEFAULT_VAN_END = 60
@@ -413,6 +414,47 @@ def init_vans(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END):
     conn.commit()
     conn.close()
 
+def ensure_firestore_vans_seeded(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END) -> None:
+    """
+    Firestore doesn't have a default van list unless we seed it.
+    If the `vans` collection is empty, Add/Delete can look like the first added van "replaced" everything.
+
+    This seeds vans start..end once per Firestore project, tracked by `vans/__meta__`.
+    Safe to call on app startup.
+    """
+    if not using_firestore():
+        return
+    if st.session_state.get("_firestore_vans_seed_checked"):
+        return
+    st.session_state["_firestore_vans_seed_checked"] = True
+
+    try:
+        db = get_firestore_client()
+        meta_ref = db.collection(VANS_COLLECTION).document(VANS_META_DOC_ID)
+        meta = meta_ref.get(**_fs_kwargs())
+        if meta.exists and (meta.to_dict() or {}).get("vans_seeded"):
+            return
+
+        batch = db.batch()
+        now = datetime.utcnow().isoformat()
+        for n in range(start, end + 1):
+            ref = db.collection(VANS_COLLECTION).document(str(n))
+            batch.set(
+                ref,
+                {
+                    "van_number": str(n),
+                    VAN_META_OPEN_COUNT: 0,
+                    VAN_META_HAS_ISSUE: False,
+                    "created_at": now,
+                    "updated_at": now,
+                },
+                merge=True,
+            )
+        batch.set(meta_ref, {"vans_seeded": True, "seeded_at": now}, merge=True)
+        batch.commit()
+    except Exception as e:
+        _firestore_warn_once("seeding vans list", e)
+
 @st.cache_data(ttl=600)
 def fetch_all_vans(backend: str = "sqlite") -> list[str]:
     """Stored list of vans (numbers as strings)."""
@@ -423,7 +465,10 @@ def fetch_all_vans(backend: str = "sqlite") -> list[str]:
             vans = []
             for d in docs:
                 data = d.to_dict() or {}
-                vans.append(str(data.get("van_number", d.id)))
+                vn = str(data.get("van_number") or d.id).strip()
+                if not vn.isdigit():
+                    continue
+                vans.append(vn)
             vans.sort(key=lambda x: int(x) if str(x).isdigit() else 10**9)
             return vans
         except Exception as e:
@@ -523,25 +568,27 @@ def upsert_van(van_number: str):
     conn.commit()
     conn.close()
 
-def delete_van(van_number: str):
+def delete_van(van_number: str) -> bool:
     van_number = str(van_number).strip()
     if not van_number:
-        return
+        return False
 
     if using_firestore():
         try:
             db = get_firestore_client()
             db.collection(VANS_COLLECTION).document(van_number).delete(**_fs_kwargs())
-            return
+            return True
         except Exception as e:
             _firestore_warn_once(f"deleting van {van_number}", e)
-        return
+        return False
 
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("DELETE FROM vans WHERE van_number=?", (van_number,))
+    deleted = cur.rowcount > 0
     conn.commit()
     conn.close()
+    return deleted
 
 @st.cache_data(ttl=600)
 def fetch_all_vans_status(backend: str = "sqlite") -> list[dict]:
@@ -552,7 +599,9 @@ def fetch_all_vans_status(backend: str = "sqlite") -> list[dict]:
             rows: list[dict] = []
             for d in docs:
                 data = d.to_dict() or {}
-                vn = str(data.get("van_number") or d.id)
+                vn = str(data.get("van_number") or d.id).strip()
+                if not vn.isdigit():
+                    continue
                 open_count = int(data.get(VAN_META_OPEN_COUNT) or 0)
                 has_issue = bool(data.get(VAN_META_HAS_ISSUE)) if VAN_META_HAS_ISSUE in data else (open_count > 0)
                 rows.append({"Van": vn, "Available": (not has_issue), "Open Issues": open_count})
@@ -579,6 +628,7 @@ def fetch_all_vans_status(backend: str = "sqlite") -> list[dict]:
 st.set_page_config(page_title="Van Issues Log", layout="wide")
 init_db()
 init_sqlite_vans()
+ensure_firestore_vans_seeded()
 
 PROVIDER_OPTIONS = ["Goodyear", "Spiffy", "Les Schwab", "Discount", "Showcase", "Rairdon", "Harris", "In house"]
 
@@ -848,7 +898,8 @@ def render_submit_query() -> None:
 
 def render_manage_vans() -> None:
     st.subheader("Vans (available vs unavailable)")
-    vans = fetch_all_vans_status(backend=("firestore" if using_firestore() else "sqlite"))
+    backend = "firestore" if using_firestore() else "sqlite"
+    vans = fetch_all_vans_status(backend=backend)
     available = [v for v in vans if v.get("Available")]
     unavailable = [v for v in vans if not v.get("Available")]
 
@@ -893,13 +944,12 @@ def render_manage_vans() -> None:
 
     st.divider()
     st.markdown("**Delete a van**")
-    vans_status = fetch_all_vans_status(backend=("firestore" if using_firestore() else "sqlite"))
-    if not vans_status:
+    if not vans:
         st.info("No vans in the list yet.")
     else:
         options: list[str] = []
         label_to_van: dict[str, str] = {}
-        for row in vans_status:
+        for row in vans:
             v = str(row.get("Van", "")).strip()
             if not v:
                 continue
@@ -921,10 +971,12 @@ def render_manage_vans() -> None:
             if not van_number:
                 st.error("Please select a van.")
             else:
-                delete_van(van_number)
-                st.cache_data.clear()
-                st.success(f"Deleted van {van_number}.")
-                st.rerun()
+                if delete_van(van_number):
+                    st.cache_data.clear()
+                    st.success(f"Deleted van {van_number}.")
+                    st.rerun()
+                else:
+                    st.error(f"Could not delete van {van_number}. Please try again.")
 
 
 def render_reports() -> None:
