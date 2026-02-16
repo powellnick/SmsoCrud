@@ -627,18 +627,13 @@ def _build_issue_label_map(issues: list[dict]) -> dict[str, str]:
     label_counts: dict[str, int] = {}
     for r in issues:
         van = (r.get("van_number") if hasattr(r, "get") else r["van_number"]) or ""
-        reported = (r.get("date_reported") if hasattr(r, "get") else r["date_reported"]) or ""
-        provider = (r.get("fix_by") if hasattr(r, "get") else r["fix_by"]) or ""
         problem = (r.get("problem_description") if hasattr(r, "get") else r["problem_description"]) or ""
         problem_short = str(problem).strip().replace("\n", " ")
         if len(problem_short) > 40:
             problem_short = problem_short[:40] + "…"
 
-        label_base = f"Van {van} | Reported {reported}"
-        if provider:
-            label_base += f" | {provider}"
-        if problem_short:
-            label_base += f" | {problem_short}"
+        label_base = f"Van {str(van).strip()}"
+        label_base += f" | {problem_short or '(no description)'}"
 
         n = label_counts.get(label_base, 0) + 1
         label_counts[label_base] = n
