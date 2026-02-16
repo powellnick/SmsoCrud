@@ -511,9 +511,10 @@ def fetch_available_vans(backend: str = "sqlite") -> list[str]:
                 data = d.to_dict() or {}
                 has_issue = bool(data.get(VAN_META_HAS_ISSUE)) if VAN_META_HAS_ISSUE in data else (int(data.get(VAN_META_OPEN_COUNT) or 0) > 0)
                 if not has_issue:
-                    vn = data.get("van_number") or d.id
-                    if vn:
-                        vans.append(str(vn))
+                    vn = str(data.get("van_number") or d.id).strip()
+                    if not vn.isdigit():
+                        continue
+                    vans.append(vn)
             vans.sort(key=lambda x: int(x) if str(x).isdigit() else 10**9)
             return vans if vans else _default_vans_list(DEFAULT_VAN_START, DEFAULT_VAN_END)
         except Exception as e:
