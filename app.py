@@ -691,7 +691,7 @@ _render_section_nav()
 
 
 def render_submit_query() -> None:
-    mode_col1, mode_col2 = st.columns([2, 3])
+    mode_col1, _mode_col2 = st.columns([2, 3])
     with mode_col1:
         try:
             mode = st.radio(
@@ -711,39 +711,42 @@ def render_submit_query() -> None:
                 st.rerun()
 
     edit_issue = None
-    preselected_issue_id = st.session_state.get("edit_issue_id")
-    if preselected_issue_id and mode == "Edit existing":
-        edit_issue = fetch_issue_by_id(preselected_issue_id)
-        with mode_col2:
-            if edit_issue is not None:
-                pass
-            else:
-                st.info("A report row was selected, but the issue could not be loaded from the current backend.")
-                st.caption("Use “Clear selected issue” (under Mode) to continue.")
-
-    if mode == "Edit existing" and edit_issue is None:
+    if mode == "Edit existing":
         if using_firestore():
-            with mode_col2:
-                if st.button("Load issues for editing", key="load_issues_edit_btn", use_container_width=True):
-                    st.session_state["load_issues_edit"] = True
-                    try:
-                        fetch_issues.clear()
-                    except Exception:
-                        st.cache_data.clear()
-            if st.session_state.get("load_issues_edit"):
-                issues_for_edit = fetch_issues(limit=EDIT_LIMIT_FIRESTORE, backend="firestore")
-            else:
-                issues_for_edit = []
+            issues_for_edit = fetch_issues(limit=EDIT_LIMIT_FIRESTORE, backend="firestore")
         else:
             issues_for_edit = fetch_issues(limit=5000, backend="sqlite")
 
         issue_map = _build_issue_label_map(issues_for_edit)
-        with mode_col2:
+        id_to_label = {v: k for k, v in issue_map.items()}
+
+        current_id = str(st.session_state.get("edit_issue_id") or "").strip()
+        if current_id and current_id not in id_to_label:
+            fallback_label = f"Issue {current_id}"
+            issue_map = {fallback_label: current_id, **issue_map}
+            id_to_label = {current_id: fallback_label, **id_to_label}
+
+        options = ["--Select issue--"] + list(issue_map.keys())
+        current_label = id_to_label.get(current_id)
+        selected_index = options.index(current_label) if current_label in options else 0
+
+        with mode_col1:
             if issue_map:
-                selected_label = st.selectbox("Select an issue to edit", list(issue_map.keys()))
-                edit_issue = fetch_issue_by_id(issue_map[selected_label])
+                selected_label = st.selectbox(
+                    "Select an issue to edit",
+                    options=options,
+                    index=selected_index,
+                    key="edit_issue_select",
+                )
+                selected_id = "" if selected_label == "--Select issue--" else str(issue_map.get(selected_label, "") or "")
+                if selected_id:
+                    st.session_state["edit_issue_id"] = selected_id
+                    edit_issue = fetch_issue_by_id(selected_id)
+                    if edit_issue is None:
+                        st.info("Selected issue could not be loaded from the current backend.")
+                        st.caption("Use “Clear selected issue” (under Mode) to continue.")
             else:
-                st.info("No issues loaded yet.")
+                st.info("No issues found.")
 
     if edit_issue:
         default_van = edit_issue["van_number"]
