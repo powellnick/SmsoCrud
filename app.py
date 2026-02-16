@@ -807,7 +807,7 @@ def render_submit_query() -> None:
         st.markdown("**Action**")
         action = st.text_area("", value=default_action, height=90, label_visibility="collapsed")
 
-        at_service_provider = st.checkbox("At service provider", value=default_at_service_provider)
+        at_service_provider = st.checkbox("Deliver to service provider", value=default_at_service_provider)
 
         bottom = st.columns([2, 1, 2, 3])
         with bottom[0]:
@@ -1093,7 +1093,7 @@ def render_reports() -> None:
             "Date Reported": r.get("date_reported", "") if hasattr(r, "get") else r["date_reported"],
             "Grounded": "YES" if (r.get("grounded") if hasattr(r, "get") else r["grounded"]) else "NO",
             "Unusable": "YES" if (r.get("unusable") if hasattr(r, "get") else r["unusable"]) else "NO",
-            "At service provider": "YES" if (r.get("at_service_provider") if hasattr(r, "get") else r["at_service_provider"]) else "NO",
+            "Deliver to service provider": "YES" if (r.get("at_service_provider") if hasattr(r, "get") else r["at_service_provider"]) else "NO",
             "Fix Date": (r.get("fix_date") if hasattr(r, "get") else r["fix_date"]) or "",
             "Provider": (r.get("fix_by") if hasattr(r, "get") else r["fix_by"]) or "",
             "Problem": r.get("problem_description", "") if hasattr(r, "get") else r["problem_description"],
