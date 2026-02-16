@@ -367,7 +367,8 @@ def fetch_issue_by_id(issue_id):
 
 
 VANS_COLLECTION = "vans"
-VANS_META_DOC_ID = "__meta__"
+# Avoid reserved Firestore ids like "meta" / "__meta__".
+VANS_META_DOC_ID = "seed_state"
 ISSUES_COLLECTION = "van_issues"
 DEFAULT_VAN_START = 1
 DEFAULT_VAN_END = 60
@@ -419,7 +420,7 @@ def ensure_firestore_vans_seeded(start: int = DEFAULT_VAN_START, end: int = DEFA
     Firestore doesn't have a default van list unless we seed it.
     If the `vans` collection is empty, Add/Delete can look like the first added van "replaced" everything.
 
-    This seeds vans start..end once per Firestore project, tracked by `vans/__meta__`.
+    This seeds vans start..end once per Firestore project, tracked by `vans/seed_state`.
     Safe to call on app startup.
     """
     if not using_firestore():
