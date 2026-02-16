@@ -653,7 +653,7 @@ def _parse_iso_date(s: str | None):
         return None
     return date.fromisoformat(s)
 
-st.title("SMSO FLEET MANAGEMENT")
+st.title("SMSO Fleet Management")
 
 pending_submit_mode = st.session_state.pop("_pending_submit_mode", None)
 if pending_submit_mode in {"Create new", "Edit existing"}:
