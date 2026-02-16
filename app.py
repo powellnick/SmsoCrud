@@ -367,7 +367,6 @@ def fetch_issue_by_id(issue_id):
 
 
 VANS_COLLECTION = "vans"
-# Avoid reserved Firestore ids like "meta" / "__meta__".
 VANS_META_DOC_ID = "seed_state"
 ISSUES_COLLECTION = "van_issues"
 DEFAULT_VAN_START = 1
@@ -416,13 +415,6 @@ def init_vans(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END):
     conn.close()
 
 def ensure_firestore_vans_seeded(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END) -> None:
-    """
-    Firestore doesn't have a default van list unless we seed it.
-    If the `vans` collection is empty, Add/Delete can look like the first added van "replaced" everything.
-
-    This seeds vans start..end once per Firestore project, tracked by `vans/seed_state`.
-    Safe to call on app startup.
-    """
     if not using_firestore():
         return
     if st.session_state.get("_firestore_vans_seed_checked"):
@@ -458,7 +450,6 @@ def ensure_firestore_vans_seeded(start: int = DEFAULT_VAN_START, end: int = DEFA
 
 @st.cache_data(ttl=600)
 def fetch_all_vans(backend: str = "sqlite") -> list[str]:
-    """Stored list of vans (numbers as strings)."""
     if using_firestore():
         try:
             db = get_firestore_client()
@@ -484,7 +475,6 @@ def fetch_all_vans(backend: str = "sqlite") -> list[str]:
 
 @st.cache_data(ttl=600)
 def fetch_vans_with_issues(limit: int = 5000, backend: str = "sqlite") -> set[str]:
-    """Set of van numbers that currently have at least one issue record."""
     if using_firestore():
         try:
             db = get_firestore_client()
@@ -512,7 +502,6 @@ def fetch_vans_with_issues(limit: int = 5000, backend: str = "sqlite") -> set[st
 
 @st.cache_data(ttl=600)
 def fetch_available_vans(backend: str = "sqlite") -> list[str]:
-    """Available vans are those in the vans list that have 0 issue records."""
     if using_firestore():
         try:
             db = get_firestore_client()
@@ -556,7 +545,6 @@ def upsert_van(van_number: str):
                 **_fs_kwargs(),
             )
         except AlreadyExists:
-            # Don't overwrite status fields; just ensure the van_number stays present.
             ref.set({"van_number": van_number, "updated_at": now}, merge=True, **_fs_kwargs())
         except Exception as e:
             _firestore_warn_once(f"upserting van {van_number}", e)
