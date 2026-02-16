@@ -523,25 +523,27 @@ def upsert_van(van_number: str):
     conn.commit()
     conn.close()
 
-def delete_van(van_number: str):
+def delete_van(van_number: str) -> bool:
     van_number = str(van_number).strip()
     if not van_number:
-        return
+        return False
 
     if using_firestore():
         try:
             db = get_firestore_client()
             db.collection(VANS_COLLECTION).document(van_number).delete(**_fs_kwargs())
-            return
+            return True
         except Exception as e:
             _firestore_warn_once(f"deleting van {van_number}", e)
-        return
+        return False
 
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("DELETE FROM vans WHERE van_number=?", (van_number,))
+    deleted = cur.rowcount > 0
     conn.commit()
     conn.close()
+    return deleted
 
 @st.cache_data(ttl=600)
 def fetch_all_vans_status(backend: str = "sqlite") -> list[dict]:
@@ -921,10 +923,12 @@ def render_manage_vans() -> None:
             if not van_number:
                 st.error("Please select a van.")
             else:
-                delete_van(van_number)
-                st.cache_data.clear()
-                st.success(f"Deleted van {van_number}.")
-                st.rerun()
+                if delete_van(van_number):
+                    st.cache_data.clear()
+                    st.success(f"Deleted van {van_number}.")
+                    st.rerun()
+                else:
+                    st.error(f"Could not delete van {van_number}. Please try again.")
 
 
 def render_reports() -> None:
