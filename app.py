@@ -969,7 +969,7 @@ def render_manage_vans() -> None:
     with c1:
         new_vans_text = st.text_input(
             "Add van numbers",
-            placeholder="Example: SMSO 01, 62",
+            placeholder="Example: SMSO 01",
             label_visibility="collapsed",
         )
     with c2:
