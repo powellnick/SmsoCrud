@@ -615,7 +615,7 @@ def fetch_all_vans_status(backend: str = "sqlite") -> list[dict]:
         })
     return rows
 
-st.set_page_config(page_title="SMSO FLEET MANAGEMENT", layout="wide")
+st.set_page_config(page_title="Van Issues Log", layout="wide")
 init_db()
 init_sqlite_vans()
 ensure_firestore_vans_seeded()
@@ -653,7 +653,8 @@ def _parse_iso_date(s: str | None):
         return None
     return date.fromisoformat(s)
 
-st.title("SMSO FLEET MANAGEMENT")
+st.title("Van Issues Log")
+st.caption(f"Backend: {'Firestore' if using_firestore() else 'SQLite'}")
 
 pending_submit_mode = st.session_state.pop("_pending_submit_mode", None)
 if pending_submit_mode in {"Create new", "Edit existing"}:
@@ -661,12 +662,12 @@ if pending_submit_mode in {"Create new", "Edit existing"}:
 elif st.session_state.get("edit_issue_id") and "submit_mode" not in st.session_state:
     st.session_state["submit_mode"] = "Edit existing"
 
-SECTIONS = ["Submit query", "Add/Delete", "Reports"]
+SECTIONS = ["Add Van Issue", "Add/Delete", "Reports"]
 nav_to = st.session_state.pop("_nav_to_section", None)
 if nav_to in SECTIONS:
     st.session_state["active_section"] = nav_to
 elif "active_section" not in st.session_state:
-    st.session_state["active_section"] = "Submit query"
+    st.session_state["active_section"] = "Add Van Issue"
 
 def _render_section_nav() -> None:
     active = st.session_state.get("active_section") or SECTIONS[0]
@@ -1141,11 +1142,11 @@ def render_reports() -> None:
             if issue_id:
                 st.session_state["edit_issue_id"] = str(issue_id)
                 st.session_state["_pending_submit_mode"] = "Edit existing"
-                st.session_state["_nav_to_section"] = "Submit query"
+                st.session_state["_nav_to_section"] = "Add Van Issue"
                 st.rerun()
         return
 
-    st.caption("Tip: Select a row, then click “Edit selected issue”, then open the “Submit query” tab.")
+    st.caption("Tip: Select a row, then click “Edit selected issue”, then open the “Add Van Issue” tab.")
     event = st.dataframe(
         df.drop(columns=["_issue_id"]),
         use_container_width=True,
@@ -1172,11 +1173,11 @@ def render_reports() -> None:
     if st.button("Edit selected issue", type="primary", use_container_width=True):
         st.session_state["edit_issue_id"] = selected_issue_id
         st.session_state["_pending_submit_mode"] = "Edit existing"
-        st.session_state["_nav_to_section"] = "Submit query"
+        st.session_state["_nav_to_section"] = "Add Van Issue"
         st.rerun()
 
-active_section = st.session_state.get("active_section") or "Submit query"
-if active_section == "Submit query":
+active_section = st.session_state.get("active_section") or "Add Van Issue"
+if active_section == "Add Van Issue":
     render_submit_query()
 elif active_section == "Add/Delete":
     render_manage_vans()
