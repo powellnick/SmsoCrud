@@ -648,7 +648,7 @@ def _parse_iso_date(s: str | None):
         return None
     return date.fromisoformat(s)
 
-st.title("SMSO FLEET MANAGEMENT")
+st.markdown("<h1 style='text-align: center;'>SMSO FLEET MANAGEMENT</h1>", unsafe_allow_html=True)
 
 pending_submit_mode = st.session_state.pop("_pending_submit_mode", None)
 if pending_submit_mode in {"Create new", "Edit existing"}:
@@ -1093,7 +1093,7 @@ def render_reports() -> None:
             "Date Reported": r.get("date_reported", "") if hasattr(r, "get") else r["date_reported"],
             "Grounded": "YES" if (r.get("grounded") if hasattr(r, "get") else r["grounded"]) else "NO",
             "Unusable": "YES" if (r.get("unusable") if hasattr(r, "get") else r["unusable"]) else "NO",
-            "Deliver to Provider": "YES" if (r.get("at_service_provider") if hasattr(r, "get") else r["at_service_provider"]) else "NO",
+            "Deliver to provider": "YES" if (r.get("at_service_provider") if hasattr(r, "get") else r["at_service_provider"]) else "NO",
             "Fix Date": (r.get("fix_date") if hasattr(r, "get") else r["fix_date"]) or "",
             "Provider": (r.get("fix_by") if hasattr(r, "get") else r["fix_by"]) or "",
             "Problem": r.get("problem_description", "") if hasattr(r, "get") else r["problem_description"],
