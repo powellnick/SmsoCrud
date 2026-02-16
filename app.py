@@ -615,7 +615,7 @@ def fetch_all_vans_status(backend: str = "sqlite") -> list[dict]:
         })
     return rows
 
-st.set_page_config(page_title="Van Issues Log", layout="wide")
+st.set_page_config(page_title="SMSO FLEET MANAGEMENT", layout="wide")
 init_db()
 init_sqlite_vans()
 ensure_firestore_vans_seeded()
@@ -653,8 +653,7 @@ def _parse_iso_date(s: str | None):
         return None
     return date.fromisoformat(s)
 
-st.title("Van Issues Log")
-st.caption(f"Backend: {'Firestore' if using_firestore() else 'SQLite'}")
+st.title("SMSO FLEET MANAGEMENT")
 
 pending_submit_mode = st.session_state.pop("_pending_submit_mode", None)
 if pending_submit_mode in {"Create new", "Edit existing"}:
