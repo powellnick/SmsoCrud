@@ -436,7 +436,6 @@ def ensure_firestore_vans_seeded(start: int = DEFAULT_VAN_START, end: int = DEFA
             st.session_state["_firestore_vans_seed_checked"] = True
             return
 
-        # Legacy meta (or missing version): only auto-repair if there are zero numeric vans docs.
         if seeded_flag and seed_version < VANS_SEED_VERSION:
             has_numeric_van = False
             try:
@@ -714,12 +713,11 @@ if pending_submit_mode in {"Create new", "Edit existing"}:
 elif st.session_state.get("edit_issue_id") and "submit_mode" not in st.session_state:
     st.session_state["submit_mode"] = "Edit existing"
 
-SECTIONS = ["Add Van Issue", "Add/Delete", "Reports"]
+SECTIONS = ["Add Van Issue", "Add/Delete Vans", "Reports"]
 nav_to = st.session_state.pop("_nav_to_section", None)
 if nav_to in SECTIONS:
     st.session_state["active_section"] = nav_to
 elif "active_section" not in st.session_state:
-    # Landing view: show only title + navigation until a section is chosen.
     st.session_state["active_section"] = ""
 
 def _render_section_nav() -> None:
@@ -855,7 +853,7 @@ def render_submit_query() -> None:
                 date_reported = st.date_input("", value=default_date_reported, label_visibility="collapsed")
 
         with right:
-            st.markdown("")  # spacer
+            st.markdown("")
             grounded = st.checkbox("Grounded?", value=default_grounded)
             unusable = st.checkbox("Unusable", value=default_unusable)
 
@@ -971,7 +969,7 @@ def render_manage_vans() -> None:
     with c1:
         new_vans_text = st.text_input(
             "Add van numbers",
-            placeholder="Example: SMSO 01",
+            placeholder="Example: SMSO 01, 62",
             label_visibility="collapsed",
         )
     with c2:
@@ -1238,10 +1236,9 @@ def render_reports() -> None:
 active_section = st.session_state.get("active_section") or ""
 if active_section == "Add Van Issue":
     render_submit_query()
-elif active_section == "Add/Delete":
+elif active_section == "Add/Delete Vans":
     render_manage_vans()
 elif active_section == "Reports":
     render_reports()
 else:
-    # Initial landing: navigation only.
     pass
