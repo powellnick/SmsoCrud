@@ -371,6 +371,7 @@ VANS_META_DOC_ID = "seed_state"
 ISSUES_COLLECTION = "van_issues"
 DEFAULT_VAN_START = 1
 DEFAULT_VAN_END = 60
+VANS_SEED_VERSION = 2
 
 def init_vans(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END):
     if using_firestore():
@@ -417,16 +418,48 @@ def init_vans(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END):
 def ensure_firestore_vans_seeded(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END) -> None:
     if not using_firestore():
         return
-    if st.session_state.get("_firestore_vans_seed_checked"):
-        return
-    st.session_state["_firestore_vans_seed_checked"] = True
-
     try:
         db = get_firestore_client()
         meta_ref = db.collection(VANS_COLLECTION).document(VANS_META_DOC_ID)
         meta = meta_ref.get(**_fs_kwargs())
-        if meta.exists and (meta.to_dict() or {}).get("vans_seeded"):
+        meta_data = meta.to_dict() or {} if meta.exists else {}
+        seeded_flag = bool(meta_data.get("vans_seeded"))
+        seed_version = int(meta_data.get("seed_version") or 0)
+
+        if seeded_flag and seed_version >= VANS_SEED_VERSION:
+            st.session_state["_firestore_vans_seed_checked"] = True
             return
+
+        # Legacy meta (or missing version): only auto-repair if there are zero numeric vans docs.
+        if seeded_flag and seed_version < VANS_SEED_VERSION:
+            has_numeric_van = False
+            try:
+                for d in db.collection(VANS_COLLECTION).stream(**_fs_kwargs()):
+                    data = d.to_dict() or {}
+                    vn = str(data.get("van_number") or d.id).strip()
+                    if vn.isdigit():
+                        has_numeric_van = True
+                        break
+            except Exception as e:
+                _firestore_warn_once("checking vans seed state", e)
+                return
+
+            if has_numeric_van:
+                try:
+                    meta_ref.set(
+                        {"vans_seeded": True, "seed_version": VANS_SEED_VERSION, "seed_start": start, "seed_end": end},
+                        merge=True,
+                        **_fs_kwargs(),
+                    )
+                except Exception as e:
+                    _firestore_warn_once("updating vans seed metadata", e)
+                    return
+                try:
+                    st.cache_data.clear()
+                except Exception:
+                    pass
+                st.session_state["_firestore_vans_seed_checked"] = True
+                return
 
         batch = db.batch()
         now = datetime.utcnow().isoformat()
@@ -443,8 +476,23 @@ def ensure_firestore_vans_seeded(start: int = DEFAULT_VAN_START, end: int = DEFA
                 },
                 merge=True,
             )
-        batch.set(meta_ref, {"vans_seeded": True, "seeded_at": now}, merge=True)
+        batch.set(
+            meta_ref,
+            {
+                "vans_seeded": True,
+                "seeded_at": now,
+                "seed_version": VANS_SEED_VERSION,
+                "seed_start": start,
+                "seed_end": end,
+            },
+            merge=True,
+        )
         batch.commit()
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        st.session_state["_firestore_vans_seed_checked"] = True
     except Exception as e:
         _firestore_warn_once("seeding vans list", e)
 
@@ -465,6 +513,7 @@ def fetch_all_vans(backend: str = "sqlite") -> list[str]:
             return vans
         except Exception as e:
             _firestore_warn_once("loading vans list", e)
+            return []
 
     conn = get_conn()
     cur = conn.cursor()
@@ -492,6 +541,7 @@ def fetch_vans_with_issues(limit: int = 5000, backend: str = "sqlite") -> set[st
             return s
         except Exception as e:
             _firestore_warn_once("loading vans-with-issues", e)
+            return set()
 
     conn = get_conn()
     cur = conn.cursor()
@@ -516,10 +566,10 @@ def fetch_available_vans(backend: str = "sqlite") -> list[str]:
                         continue
                     vans.append(vn)
             vans.sort(key=lambda x: int(x) if str(x).isdigit() else 10**9)
-            return vans if vans else _default_vans_list(DEFAULT_VAN_START, DEFAULT_VAN_END)
+            return vans
         except Exception as e:
             _firestore_warn_once("loading available vans", e)
-            return _default_vans_list(DEFAULT_VAN_START, DEFAULT_VAN_END)
+            return []
 
     all_vans = fetch_all_vans(backend="sqlite")
     unavailable = fetch_vans_with_issues(backend="sqlite")
@@ -596,14 +646,11 @@ def fetch_all_vans_status(backend: str = "sqlite") -> list[dict]:
                 has_issue = bool(data.get(VAN_META_HAS_ISSUE)) if VAN_META_HAS_ISSUE in data else (open_count > 0)
                 rows.append({"Van": vn, "Available": (not has_issue), "Open Issues": open_count})
 
-            if not rows:
-                rows = [{"Van": vn, "Available": True, "Open Issues": 0} for vn in _default_vans_list(DEFAULT_VAN_START, DEFAULT_VAN_END)]
-
             rows.sort(key=lambda r: int(r["Van"]) if str(r["Van"]).isdigit() else 10**9)
             return rows
         except Exception as e:
             _firestore_warn_once("loading vans status", e)
-            # Fallback to SQLite status below if possible.
+            return []
 
     vans = fetch_all_vans(backend="sqlite")
     unavailable = fetch_vans_with_issues(backend="sqlite")
