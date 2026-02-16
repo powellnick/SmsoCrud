@@ -373,6 +373,12 @@ DEFAULT_VAN_START = 1
 DEFAULT_VAN_END = 60
 VANS_SEED_VERSION = 2
 
+def _van_sort_key(van_number: str) -> tuple:
+    s = str(van_number or "").strip()
+    if s.isdigit():
+        return (0, int(s), "")
+    return (1, s.casefold(), s)
+
 def init_vans(start: int = DEFAULT_VAN_START, end: int = DEFAULT_VAN_END):
     if using_firestore():
         db = get_firestore_client()
@@ -506,10 +512,10 @@ def fetch_all_vans(backend: str = "sqlite") -> list[str]:
             for d in docs:
                 data = d.to_dict() or {}
                 vn = str(data.get("van_number") or d.id).strip()
-                if not vn.isdigit():
+                if not vn or d.id == VANS_META_DOC_ID or vn == VANS_META_DOC_ID:
                     continue
                 vans.append(vn)
-            vans.sort(key=lambda x: int(x) if str(x).isdigit() else 10**9)
+            vans.sort(key=_van_sort_key)
             return vans
         except Exception as e:
             _firestore_warn_once("loading vans list", e)
@@ -517,9 +523,11 @@ def fetch_all_vans(backend: str = "sqlite") -> list[str]:
 
     conn = get_conn()
     cur = conn.cursor()
-    cur.execute("SELECT van_number FROM vans ORDER BY CAST(van_number AS INTEGER) ASC")
+    cur.execute("SELECT van_number FROM vans")
     vans = [row[0] for row in cur.fetchall()]
     conn.close()
+    vans = [str(v).strip() for v in vans if str(v).strip()]
+    vans.sort(key=_van_sort_key)
     return vans
 
 @st.cache_data(ttl=600)
@@ -559,13 +567,13 @@ def fetch_available_vans(backend: str = "sqlite") -> list[str]:
             vans: list[str] = []
             for d in docs:
                 data = d.to_dict() or {}
+                vn = str(data.get("van_number") or d.id).strip()
+                if not vn or d.id == VANS_META_DOC_ID or vn == VANS_META_DOC_ID:
+                    continue
                 has_issue = bool(data.get(VAN_META_HAS_ISSUE)) if VAN_META_HAS_ISSUE in data else (int(data.get(VAN_META_OPEN_COUNT) or 0) > 0)
                 if not has_issue:
-                    vn = str(data.get("van_number") or d.id).strip()
-                    if not vn.isdigit():
-                        continue
                     vans.append(vn)
-            vans.sort(key=lambda x: int(x) if str(x).isdigit() else 10**9)
+            vans.sort(key=_van_sort_key)
             return vans
         except Exception as e:
             _firestore_warn_once("loading available vans", e)
@@ -581,6 +589,9 @@ def upsert_van(van_number: str):
         return
 
     if using_firestore():
+        if "/" in van_number:
+            _firestore_warn_once("upserting van (invalid id)", ValueError("Van number cannot contain '/' when using Firestore."))
+            return
         try:
             db = get_firestore_client()
             ref = db.collection(VANS_COLLECTION).document(van_number)
@@ -640,13 +651,13 @@ def fetch_all_vans_status(backend: str = "sqlite") -> list[dict]:
             for d in docs:
                 data = d.to_dict() or {}
                 vn = str(data.get("van_number") or d.id).strip()
-                if not vn.isdigit():
+                if not vn or d.id == VANS_META_DOC_ID or vn == VANS_META_DOC_ID:
                     continue
                 open_count = int(data.get(VAN_META_OPEN_COUNT) or 0)
                 has_issue = bool(data.get(VAN_META_HAS_ISSUE)) if VAN_META_HAS_ISSUE in data else (open_count > 0)
                 rows.append({"Van": vn, "Available": (not has_issue), "Open Issues": open_count})
 
-            rows.sort(key=lambda r: int(r["Van"]) if str(r["Van"]).isdigit() else 10**9)
+            rows.sort(key=lambda r: _van_sort_key(r.get("Van", "")))
             return rows
         except Exception as e:
             _firestore_warn_once("loading vans status", e)
@@ -958,20 +969,23 @@ def render_manage_vans() -> None:
     except TypeError:
         c1, c2 = st.columns([3, 1])
     with c1:
-        new_vans_text = st.text_input("Add van numbers", placeholder="Example: 62, 64", label_visibility="collapsed")
+        new_vans_text = st.text_input(
+            "Add van numbers",
+            placeholder="Example: 62, 64, SMSO 01",
+            label_visibility="collapsed",
+        )
     with c2:
         add_btn = st.button("Add", use_container_width=True, key="add_van_btn")
 
     if add_btn:
-        raw = new_vans_text.replace("\n", ",").replace(" ", ",")
+        raw = new_vans_text.replace("\n", ",")
         parts = [p.strip() for p in raw.split(",") if p.strip()]
         added = 0
         for p in parts:
-            if p.isdigit():
-                upsert_van(p)
-                added += 1
+            upsert_van(p)
+            added += 1
         if added == 0:
-            st.warning("No valid van numbers found. Please enter numbers like: 62, 64")
+            st.warning("No valid van numbers found. Please enter values like: 62, 64, SMSO 01")
         else:
             st.cache_data.clear()
             st.success(f"Added {added} van(s).")
